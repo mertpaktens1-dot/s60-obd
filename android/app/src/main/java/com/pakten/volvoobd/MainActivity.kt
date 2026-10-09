@@ -43,6 +43,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Timer
@@ -120,6 +121,7 @@ private val SEKMELER = listOf(
     Sekme("Gösterge", Icons.Filled.Speed),
     Sekme("Performans", Icons.Filled.Timer),
     Sekme("Arızalar", Icons.Filled.Warning),
+    Sekme("Modüller", Icons.Filled.Memory),
     Sekme("Kayıt", Icons.Filled.FiberManualRecord),
 )
 
@@ -134,7 +136,7 @@ private fun Uygulama(m: AracModel) {
                         selected = sekme == i,
                         onClick = { sekme = i },
                         icon = { Icon(s.ikon, null) },
-                        label = { Text(s.ad) },
+                        label = { Text(s.ad, fontSize = 11.sp, maxLines = 1) },
                     )
                 }
             }
@@ -147,7 +149,8 @@ private fun Uygulama(m: AracModel) {
                 1 -> GostergeEkrani(m)
                 2 -> PerformansEkrani(m)
                 3 -> ArizaEkrani(m)
-                4 -> KayitEkrani(m)
+                4 -> ModullerEkrani(m)
+                5 -> KayitEkrani(m)
             }
         }
     }

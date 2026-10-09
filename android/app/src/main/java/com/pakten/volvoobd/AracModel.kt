@@ -53,6 +53,10 @@ class ModulGecmisi(val modul: String, val yontem: String, val kodlar: List<Gecmi
 
 class TaramaKaydi(val tarih: String, val ozet: List<String>)
 
+class VolvoBulgu(val modul: VolvoModul, val yanit: Boolean, val kimlik: String, val ham: String)
+
+class VolvoKodSonucu(val kodlar: List<String>, val ham: String, val not: String?)
+
 class CekisNoktasi(val devir: Float, val turbo: Float, val avans: Float, val emme: Float)
 
 class AracModel(app: Application) : AndroidViewModel(app) {
@@ -104,6 +108,14 @@ class AracModel(app: Application) : AndroidViewModel(app) {
     var tepeDevir by mutableStateOf<Double?>(null); private set
     var sonCekis by mutableStateOf<List<CekisNoktasi>>(emptyList()); private set
     var olcumAraligiMs by mutableStateOf(0); private set
+
+    // Volvo modulleri (D2)
+    var volvoHat by mutableStateOf(VolvoHat.HIZLI)
+    var volvoMesgul by mutableStateOf(false); private set
+    var volvoMesaj by mutableStateOf<String?>(null); private set
+    var volvoBulgular by mutableStateOf<List<VolvoBulgu>>(emptyList()); private set
+    val volvoKodlar = mutableStateMapOf<Int, VolvoKodSonucu>()
+    val konsol = mutableStateListOf<String>()
 
     private var elm: Elm? = null
     private var dongu: Job? = null
@@ -677,5 +689,120 @@ class AracModel(app: Application) : AndroidViewModel(app) {
         if (yag.isNotEmpty()) sonuc += "Motor yağı en yüksek %.0f °C".format(yag.max()) +
             if (yag.max() > 130) "  ⚠ yüksek" else ""
         return sonuc
+    }
+
+    // ------------------------------------------------------------ Volvo modulleri (D2)
+
+    /** Adaptoru D2 moduna alip [is]'i calistirir, sonra her durumda OBD moduna dondurur. */
+    private fun volvoOturumu(is_: suspend (Elm) -> Unit) {
+        if (volvoMesgul || durum != Durum.BAGLI) return
+        volvoMesgul = true
+        volvoMesaj = null
+        viewModelScope.launch {
+            try {
+                if (demo) {
+                    delay(700)
+                    is_(Elm(object : Tasima {
+                        override val giris = java.io.ByteArrayInputStream(ByteArray(0))
+                        override val cikis = java.io.ByteArrayOutputStream()
+                        override fun kapat() {}
+                    }))
+                } else {
+                    val e = elm ?: return@launch
+                    islem.withLock {
+                        try {
+                            e.d2Ac(volvoHat)?.let { volvoMesaj = it; return@withLock }
+                            is_(e)
+                        } finally {
+                            e.d2Kapat()
+                        }
+                    }
+                }
+            } catch (ex: Exception) {
+                volvoMesaj = "İşlem başarısız: ${ex.message}"
+            } finally {
+                volvoMesgul = false
+            }
+        }
+    }
+
+    fun volvoTara() = volvoOturumu { e ->
+        val hedefHat = if (volvoHat == VolvoHat.HIZLI) VolvoHat.HIZLI else VolvoHat.YAVAS_ELM
+        val adaylar = VOLVO_MODULLER.filter { it.hat == hedefHat }
+        val sonuc = mutableListOf<VolvoBulgu>()
+        for (m in adaylar) {
+            if (demo) {
+                val var_ = m.kisa in setOf("ECM", "TCM", "BCM", "CEM", "CCM", "DDM", "PDM", "REM", "DIM")
+                sonuc += VolvoBulgu(m, var_, if (var_) "DEMO 3${m.adres}1234 A" else "", "")
+                continue
+            }
+            val satirlar = e.d2Gonder(d2Istek(m.adres, 0xB9, 0xF0))
+            val yanit = d2Coz(satirlar).values.firstOrNull { it.size >= 2 && it[0] == m.adres }
+            sonuc += VolvoBulgu(
+                m, yanit != null && (yanit[1] == 0xF9 || yanit[1] == 0x7F),
+                yanit?.takeIf { it[1] == 0xF9 }?.let { d2Kimlik(it) }.orEmpty(),
+                (yanit?.let { hex(it) } ?: satirlar.joinToString(" | ")).take(300),
+            )
+        }
+        volvoBulgular = sonuc
+        val bulunan = sonuc.count { it.yanit }
+        volvoMesaj = if (bulunan == 0) {
+            if (volvoHat == VolvoHat.HIZLI) "Hiçbir modül Volvo protokolüne yanıt vermedi. Ham yanıtları Konsol'da inceleyebiliriz."
+            else "Yavaş hatta yanıt yok. Adaptör gerçekten pin 3/11'e bağlı mı (anahtar konumu / OBDLink)?"
+        } else "$bulunan modül yanıt verdi."
+    }
+
+    fun volvoKodOku(m: VolvoModul) = volvoOturumu { e ->
+        if (demo) {
+            volvoKodlar[m.adres] = VolvoKodSonucu(
+                if (m.kisa == "CCM") listOf("CCM-9A04 (durum 2C)") else emptyList(), "DEMO", null,
+            )
+            return@volvoOturumu
+        }
+        var ham = ""
+        for (param in listOf(0x01, 0x00)) {
+            val satirlar = e.d2Gonder(d2Istek(m.adres, 0xAE, param), 2500)
+            val v = d2Coz(satirlar).values.firstOrNull { it.size >= 2 && it[0] == m.adres }
+            ham += "AE %02X → ".format(param) + (v?.let { hex(it) } ?: satirlar.joinToString(" | ").ifEmpty { "yanıt yok" }) + "\n"
+            if (v != null && v[1] == 0xEE) {
+                volvoKodlar[m.adres] = VolvoKodSonucu(d2ArizaKodlari(m.kisa, v), ham.trim(), "Kod çözümü deneysel; ham yanıtı da saklayın.")
+                return@volvoOturumu
+            }
+        }
+        volvoKodlar[m.adres] = VolvoKodSonucu(emptyList(), ham.trim(), "Modül arıza okuma isteğini kabul etmedi.")
+    }
+
+    /**
+     * Gelismis: ham D2 cercevesi (yalnizca okuma servisleri) ya da AT komutu gonderir.
+     * ";" ile ayrilan komutlar ayni oturumda sirayla calisir (ornek: "ATCM00000000; CB 40 B9 F0 00 00 00 00").
+     */
+    fun konsolGonder(girdi: String) {
+        val parcalar = girdi.split(';').map { it.trim().uppercase() }.filter { it.isNotEmpty() }
+        if (parcalar.isEmpty()) return
+        val komutlar = mutableListOf<Pair<Boolean, String>>()
+        for (g in parcalar) {
+            val at = g.startsWith("AT") || g.startsWith("ST")
+            if (at && (g.replace(" ", "").startsWith("ATPP") || g.startsWith("STS"))) {
+                konsol += "✗ Adaptör ayarını kalıcı değiştiren komutlar kapalı: $g"; return
+            }
+            val cerceve = g.replace(" ", "").chunked(2).joinToString(" ")
+            if (!at && !d2IstekGuvenliMi(cerceve)) {
+                konsol += "✗ Yalnızca 8 baytlık OKUMA çerçeveleri (A1, A5, A6, AE, B9) gönderilebilir: $g"; return
+            }
+            komutlar += at to (if (at) g else cerceve)
+        }
+        volvoOturumu { e ->
+            for ((at, k) in komutlar) {
+                konsol += "> $k"
+                if (demo) {
+                    konsol += if (at) "OK" else "00 80 00 03 CD ${k.split(' ').getOrElse(1) { "40" }} F9 F0 44 45 4D 4F"
+                    continue
+                }
+                val satirlar = if (at) e.komut(k, 2000) else e.d2Gonder(k, 2000)
+                if (satirlar.isEmpty()) konsol += "(yanıt yok)"
+                satirlar.take(40).forEach { konsol += it }
+            }
+            while (konsol.size > 200) konsol.removeAt(0)
+        }
     }
 }

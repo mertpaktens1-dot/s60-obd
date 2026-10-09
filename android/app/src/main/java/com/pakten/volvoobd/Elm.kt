@@ -87,22 +87,37 @@ class Elm(private val t: Tasima) {
             t.cikis.write((k + "\r").toByteArray())
             t.cikis.flush()
             val sb = StringBuilder()
-            val bitis = System.currentTimeMillis() + zamanAsimiMs
-            while (System.currentTimeMillis() < bitis) {
-                if (t.giris.available() > 0) {
-                    val c = t.giris.read()
-                    if (c < 0) throw IOException("Baglanti koptu")
-                    if (c == '>'.code) break
-                    sb.append(c.toChar())
-                } else {
-                    delay(5)
-                }
+            if (!isteminiOku(sb, zamanAsimiMs)) {
+                // Adaptor hala veri basiyor (yogun hat): herhangi bir karakter onu durdurur.
+                t.cikis.write("\r".toByteArray())
+                t.cikis.flush()
+                isteminiOku(StringBuilder(), 1500)
             }
             sb.toString().split('\r', '\n')
                 .map { it.trim() }
                 .filter { it.isNotEmpty() && it.replace(" ", "") != k && !it.startsWith("SEARCHING") }
         }
     }
+
+    /** '>' istemine kadar okur; zaman asiminda false. */
+    private suspend fun isteminiOku(sb: StringBuilder, zamanAsimiMs: Long): Boolean {
+        val bitis = System.currentTimeMillis() + zamanAsimiMs
+        while (System.currentTimeMillis() < bitis) {
+            if (t.giris.available() > 0) {
+                val c = t.giris.read()
+                if (c < 0) throw IOException("Baglanti koptu")
+                if (c == '>'.code) return true
+                sb.append(c.toChar())
+            } else {
+                delay(5)
+            }
+        }
+        return false
+    }
+
+    private var obdProtokol = "ATSP6"
+    var stn = false
+        private set
 
     suspend fun baslat(gunluk: (String) -> Unit) {
         komut("ATZ", 4000)
@@ -123,6 +138,8 @@ class Elm(private val t: Tasima) {
             }
         }
         val dpn = komut("ATDPN").firstOrNull().orEmpty().removePrefix("A")
+        obdProtokol = "ATSP" + dpn.ifEmpty { "6" }
+        stn = komut("STI").any { "STN" in it.uppercase() }
         can = dpn in setOf("6", "7", "8", "9")
         protokol = komut("ATDP").firstOrNull().orEmpty()
         if (!can) komut("ATH0")
@@ -147,6 +164,38 @@ class Elm(private val t: Tasima) {
                 } else null
             }.toMap()
         }
+    }
+
+    // ------------------------------------------------------------ Volvo D2 modu
+
+    /** Adaptoru Volvo D2 (29 bit, ham cerceve) moduna alir. Hata varsa aciklamasini dondurur. */
+    suspend fun d2Ac(hat: VolvoHat): String? {
+        when (hat) {
+            VolvoHat.HIZLI -> komut("ATSP7")
+            VolvoHat.YAVAS_ELM -> {
+                // Protokol B: 29 bit, degisken uzunluk, her iki kimlik boyu; 500k / 4 = 125 kbps.
+                komut("ATPB 60 04")
+                komut("ATSPB")
+            }
+            VolvoHat.YAVAS_STN -> {
+                if (!stn) return "Bu adaptör STN (OBDLink) yongalı değil; yavaş hatta geçemiyor."
+                if (komut("STP 54").any { "?" in it }) return "Adaptör MS-CAN protokolünü kabul etmedi."
+            }
+        }
+        for (k in listOf("ATCAF0", "ATH1", "ATS1", "ATR1", "ATCP00", "ATSH0FFFFE", "ATCF00000000", "ATCM1F3F0000", "ATST32")) {
+            if (komut(k).any { it.trim() == "?" }) return "Adaptör '$k' komutunu desteklemiyor."
+        }
+        return null
+    }
+
+    /** D2 cercevesi gonderir, gelen ham satirlari dondurur. */
+    suspend fun d2Gonder(cerceve: String, zamanAsimiMs: Long = 1500): List<String> = komut(cerceve, zamanAsimiMs)
+
+    /** Standart OBD moduna geri doner. */
+    suspend fun d2Kapat() {
+        komut("ATD", 3000)
+        for (k in listOf("ATE0", "ATL0", "ATS1", "ATH1", obdProtokol)) komut(k)
+        hedef("7E0")
     }
 
     fun kapat() = t.kapat()

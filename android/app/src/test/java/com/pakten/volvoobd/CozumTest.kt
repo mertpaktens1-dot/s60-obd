@@ -83,4 +83,42 @@ class CozumTest {
         assertEquals(false, k[1].aktif)
         assertEquals(null, uds19Coz(intArrayOf(0x7F, 0x19, 0x11)))
     }
+
+    @Test
+    fun d2IstekCercevesi() {
+        // hackingvolvo: CEM akü voltajı isteği "cd 40 a6 1a 02 01 00 00"
+        assertEquals("CD 40 A6 1A 02 01 00 00", d2Istek(0x40, 0xA6, 0x1A, 0x02, 0x01))
+        assertEquals("CB 40 B9 F0 00 00 00 00", d2Istek(0x40, 0xB9, 0xF0))
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun d2YazmaServisiEngelli() {
+        d2Istek(0x40, 0xB1, 0x5F, 0x3B, 0x01, 0x01, 0x84)   // cikis kontrolu: kapali olmali
+    }
+
+    @Test
+    fun d2KonsolGuvenligi() {
+        assertEquals(true, d2IstekGuvenliMi("CB 40 B9 F0 00 00 00 00"))
+        assertEquals(false, d2IstekGuvenliMi("CF 40 B1 5F 3B 01 01 84"))
+        assertEquals(false, d2IstekGuvenliMi("CB 40 B9"))
+    }
+
+    @Test
+    fun d2TekCerceveYanit() {
+        // Tigo2000/Volvo-VIDA: ECM yaniti
+        val r = d2Coz(listOf("00 40 00 21 CD 7A E6 12 9D 95 00 00", "NO DATA"))
+        assertEquals(listOf(0x7A, 0xE6, 0x12, 0x9D, 0x95), r["00400021"]!!.toList())
+    }
+
+    @Test
+    fun d2CokCerceveYanit() {
+        val r = d2Coz(listOf(
+            "00 80 00 03 8F 40 F9 F0 33 30 37",
+            "00 80 00 03 0F 38 31 32 33 34 20",
+            "00 80 00 03 4A 41 42 00 00 00 00",
+        ))
+        val v = r["00800003"]!!
+        assertEquals(0x40, v[0]); assertEquals(0xF9, v[1])
+        assertEquals("30781234 AB", d2Kimlik(v))
+    }
 }
