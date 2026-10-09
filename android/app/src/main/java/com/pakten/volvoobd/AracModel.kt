@@ -117,6 +117,13 @@ class AracModel(app: Application) : AndroidViewModel(app) {
     val volvoKodlar = mutableStateMapOf<Int, VolvoKodSonucu>()
     val konsol = mutableStateListOf<String>()
 
+    // uygulama ici guncelleme
+    var yeniSurum by mutableStateOf<Guncelleme.YeniSurum?>(null); private set
+    var guncellemePenceresi by mutableStateOf(false)
+    var guncellemeMesaj by mutableStateOf<String?>(null); private set
+    var indirmeYuzde by mutableStateOf<Int?>(null); private set
+    private var inenApk: File? = null
+
     private var elm: Elm? = null
     private var dongu: Job? = null
     // Canli veri dongusu ile ariza taramasi ayni anda adaptoru kullanmasin (baslik degisiyor).
@@ -803,6 +810,60 @@ class AracModel(app: Application) : AndroidViewModel(app) {
                 satirlar.take(40).forEach { konsol += it }
             }
             while (konsol.size > 200) konsol.removeAt(0)
+        }
+    }
+
+    // ------------------------------------------------------------ uygulama ici guncelleme
+
+    private var acilisKontroluYapildi = false
+
+    fun acilisKontrolu() {
+        if (acilisKontroluYapildi) return
+        acilisKontroluYapildi = true
+        guncellemeKontrol(elle = false)
+    }
+
+    /** Acilista sessizce, elle istendiginde sonucu bildirerek son surumu denetler. */
+    fun guncellemeKontrol(elle: Boolean) {
+        viewModelScope.launch {
+            val c = getApplication<Application>()
+            try {
+                val y = Guncelleme.kontrol(c)
+                yeniSurum = y
+                if (y != null) {
+                    guncellemeMesaj = null
+                    guncellemePenceresi = true
+                } else if (elle) {
+                    guncellemeMesaj = "Uygulama güncel (sürüm ${Guncelleme.mevcutSurum(c)})."
+                }
+            } catch (ex: Exception) {
+                if (elle) guncellemeMesaj = "Güncelleme denetlenemedi: internet bağlantısını kontrol edin."
+            }
+        }
+    }
+
+    fun guncellemeyiKur() {
+        val c = getApplication<Application>()
+        val y = yeniSurum ?: return
+        if (!Guncelleme.kurulumIzniVar(c)) {
+            guncellemeMesaj = "Açılan ekranda \"Bu kaynaktan izin ver\" seçeneğini açın, sonra geri dönüp tekrar Güncelle'ye basın."
+            Guncelleme.kurulumIzniEkrani(c)
+            return
+        }
+        inenApk?.takeIf { it.exists() && it.name.contains(y.surum) }?.let { Guncelleme.kur(c, it); return }
+        if (indirmeYuzde != null) return
+        indirmeYuzde = 0
+        guncellemeMesaj = null
+        viewModelScope.launch {
+            try {
+                val apk = Guncelleme.indir(c, y) { indirmeYuzde = it }
+                inenApk = apk
+                Guncelleme.kur(c, apk)
+            } catch (ex: Exception) {
+                guncellemeMesaj = "İndirme başarısız: ${ex.message}"
+            } finally {
+                indirmeYuzde = null
+            }
         }
     }
 }

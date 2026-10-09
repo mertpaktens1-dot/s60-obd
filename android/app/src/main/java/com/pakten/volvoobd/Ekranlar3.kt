@@ -13,7 +13,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -28,6 +30,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -161,6 +164,59 @@ internal fun ModullerEkrani(m: AracModel) {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------------ guncelleme
+
+@Composable
+internal fun GuncellemePenceresi(m: AracModel) {
+    val y = m.yeniSurum
+    if (!m.guncellemePenceresi || y == null) return
+    val yuzde = m.indirmeYuzde
+    AlertDialog(
+        onDismissRequest = { if (yuzde == null) m.guncellemePenceresi = false },
+        title = { Text("Yeni sürüm: ${y.surum}") },
+        text = {
+            Column {
+                if (y.notlar.isNotBlank()) Text(y.notlar.take(600), fontSize = 14.sp)
+                if (yuzde != null) {
+                    Spacer(Modifier.height(12.dp))
+                    Text("İndiriliyor… %$yuzde", fontSize = 13.sp)
+                    LinearProgressIndicator(progress = { yuzde / 100f }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
+                }
+                m.guncellemeMesaj?.let { Text(it, fontSize = 13.sp, color = Turuncu3, modifier = Modifier.padding(top = 8.dp)) }
+                if (m.kayitAktif) {
+                    Text("Sürüş kaydı açık; güncellemeden önce kaydı durdurun.", fontSize = 13.sp, color = Kirmizi,
+                        modifier = Modifier.padding(top = 8.dp))
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { m.guncellemeyiKur() }, enabled = yuzde == null && !m.kayitAktif) { Text("Güncelle") }
+        },
+        dismissButton = {
+            TextButton(onClick = { m.guncellemePenceresi = false }, enabled = yuzde == null) { Text("Sonra") }
+        },
+    )
+}
+
+@Composable
+internal fun SurumKarti(m: AracModel) {
+    val c = LocalContext.current
+    Kart(arka = Color(0xFFF7F8FA)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("S60 OBD sürüm ${Guncelleme.mevcutSurum(c)}", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                m.yeniSurum?.let { Text("Yeni sürüm hazır: ${it.surum}", color = Turuncu3, fontSize = 13.sp) }
+                m.guncellemeMesaj?.takeIf { !m.guncellemePenceresi }?.let { Text(it, fontSize = 12.sp, color = Gri) }
+            }
+            if (m.yeniSurum != null) {
+                Button(onClick = { m.guncellemePenceresi = true }) { Text("Güncelle") }
+            } else {
+                OutlinedButton(onClick = { m.guncellemeKontrol(elle = true) }) { Text("Güncellemeleri denetle") }
             }
         }
     }

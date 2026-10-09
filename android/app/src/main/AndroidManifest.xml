@@ -9,6 +9,8 @@
     <!-- WiFi ELM327 icin -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
+    <!-- Uygulama ici guncelleme: GitHub'dan inen APK'yi kurulum ekranina verir. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
         android:allowBackup="false"

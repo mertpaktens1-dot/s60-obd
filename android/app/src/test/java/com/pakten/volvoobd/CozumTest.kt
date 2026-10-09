@@ -121,4 +121,13 @@ class CozumTest {
         assertEquals(0x40, v[0]); assertEquals(0xF9, v[1])
         assertEquals("30781234 AB", d2Kimlik(v))
     }
+
+    @Test
+    fun surumKarsilastirma() {
+        assertEquals(true, Guncelleme.dahaYeni("1.3.0", "1.2.0"))
+        assertEquals(true, Guncelleme.dahaYeni("v1.10.0", "1.9.2"))
+        assertEquals(false, Guncelleme.dahaYeni("1.2.0", "1.2.0"))
+        assertEquals(false, Guncelleme.dahaYeni("1.2", "1.2.0"))
+        assertEquals(false, Guncelleme.dahaYeni("1.1.9", "1.2.0"))
+    }
 }

@@ -68,6 +68,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -128,6 +129,8 @@ private val SEKMELER = listOf(
 @Composable
 private fun Uygulama(m: AracModel) {
     var sekme by rememberSaveable { mutableIntStateOf(0) }
+    LaunchedEffect(Unit) { m.acilisKontrolu() }
+    GuncellemePenceresi(m)
     Scaffold(
         bottomBar = {
             NavigationBar {
@@ -313,6 +316,7 @@ private fun BaglantiEkrani(m: AracModel, gostergeyeGec: () -> Unit) {
         if (m.durum == Durum.BAGLANIYOR) {
             item { Row { CircularProgressIndicator(Modifier.size(24.dp)); Spacer(Modifier.width(12.dp)); Text("Bağlanıyor, 20 saniye sürebilir...") } }
         }
+        item { SurumKarti(m) }
         if (m.gunluk.isNotEmpty()) {
             item {
                 Kart(arka = Color(0xFFF3F4F6)) {
