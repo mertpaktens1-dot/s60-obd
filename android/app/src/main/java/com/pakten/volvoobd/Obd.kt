@@ -108,3 +108,104 @@ fun kodAciklamasi(kod: String): String {
     }
     return "$grup – ayrıntılı açıklama için kodu internette arayın"
 }
+
+// ---------------------------------------------------------------- coklu PID
+
+/** Mod 01/02 PID veri uzunluklari (bayt). Coklu yanit bunlara gore bolunur. */
+val PID_UZUNLUK = mapOf(
+    0x01 to 4, 0x02 to 2, 0x04 to 1, 0x05 to 1, 0x06 to 1, 0x07 to 1, 0x0B to 1, 0x0C to 2, 0x0D to 1,
+    0x0E to 1, 0x0F to 1, 0x10 to 2, 0x11 to 1, 0x1F to 2, 0x21 to 2, 0x2F to 1, 0x30 to 1, 0x31 to 2,
+    0x33 to 1, 0x42 to 2, 0x46 to 1, 0x4D to 2, 0x4E to 2, 0x5C to 1,
+)
+
+/**
+ * "41 P1 veri P2 veri ..." biciminde coklu yanit. Mod 02'de her PID'den sonra kare numarasi
+ * baytı gelir ([kareBayti] = true).
+ */
+fun cokluCoz(v: IntArray, servis: Int, kareBayti: Boolean = false): Map<Int, IntArray> {
+    if (v.isEmpty() || v[0] != servis) return emptyMap()
+    val sonuc = LinkedHashMap<Int, IntArray>()
+    var i = 1
+    while (i < v.size) {
+        val pid = v[i]
+        val n = PID_UZUNLUK[pid] ?: break
+        i += if (kareBayti) 2 else 1
+        if (i + n > v.size) break
+        sonuc[pid] = v.copyOfRange(i, i + n)
+        i += n
+    }
+    return sonuc
+}
+
+// ---------------------------------------------------------------- hazirlik testleri
+
+class Monitor(val ad: String, val tamam: Boolean)
+
+/** PID 01 yaniti (A B C D), benzinli motor. Desteklenmeyen testler listelenmez. */
+fun hazirlikCoz(v: IntArray): List<Monitor> {
+    if (v.size < 4) return emptyList()
+    val (b, c, d) = Triple(v[1], v[2], v[3])
+    val l = mutableListOf<Monitor>()
+    for ((ad, bit) in listOf("Tekleme izleme" to 0, "Yakıt sistemi" to 1, "Bileşen izleme" to 2)) {
+        if ((b shr bit) and 1 == 1) l += Monitor(ad, (b shr (bit + 4)) and 1 == 0)
+    }
+    val benzin = listOf(
+        "Katalizör" to 0, "Isıtmalı katalizör" to 1, "Yakıt buharı (EVAP)" to 2, "İkincil hava" to 3,
+        "Oksijen sensörü" to 5, "Oksijen sensörü ısıtıcı" to 6, "EGR / VVT" to 7,
+    )
+    for ((ad, bit) in benzin) {
+        if ((c shr bit) and 1 == 1) l += Monitor(ad, (d shr bit) and 1 == 0)
+    }
+    return l
+}
+
+// ---------------------------------------------------------------- mod 06 tekleme sayaclari
+
+class TestSonucu(val mid: Int, val tid: Int, val deger: Int)
+
+/** CAN mod 06 yaniti: 46 [MID TID UASID deger(2) min(2) max(2)] x n */
+fun mod06Coz(v: IntArray): List<TestSonucu> {
+    if (v.isEmpty() || v[0] != 0x46) return emptyList()
+    val l = mutableListOf<TestSonucu>()
+    var i = 1
+    while (i + 9 <= v.size) {
+        l += TestSonucu(v[i], v[i + 1], v[i + 3] * 256 + v[i + 4])
+        i += 9
+    }
+    return l
+}
+
+// ---------------------------------------------------------------- UDS / KWP ariza gecmisi
+
+class GecmisKod(val kod: String, val durum: String, val aktif: Boolean)
+
+/** UDS 19 02 FF yaniti: 59 02 maske [DTC(3) durum] x n */
+fun uds19Coz(v: IntArray): List<GecmisKod>? {
+    if (v.size < 3 || v[0] != 0x59 || v[1] != 0x02) return null
+    return v.drop(3).chunked(4).filter { it.size == 4 && (it[0] != 0 || it[1] != 0) }.map { r ->
+        val s = r[3]
+        val etiket = buildList {
+            if (s and 0x01 != 0) add("şu an hatalı")
+            if (s and 0x04 != 0) add("bekleyen")
+            if (s and 0x08 != 0) add("onaylanmış")
+            if (s and 0x20 != 0 && s and 0x01 == 0) add("son silmeden beri hata vermiş")
+            if (s and 0x80 != 0) add("lamba yaktırıyor")
+        }.ifEmpty { listOf("geçmiş kayıt") }
+        GecmisKod("%s-%02X".format(dtcCoz(r[0], r[1]), r[2]), etiket.joinToString(", "), s and 0x01 != 0)
+    }
+}
+
+/** KWP2000 18 02 FF 00 yaniti: 58 adet [DTC(2) durum] x n */
+fun kwp18Coz(v: IntArray): List<GecmisKod>? {
+    if (v.size < 2 || v[0] != 0x58) return null
+    return v.drop(2).chunked(3).filter { it.size == 3 && (it[0] != 0 || it[1] != 0) }.map { r ->
+        val aktif = r[2] and 0x40 != 0 && r[2] and 0x20 != 0
+        GecmisKod(dtcCoz(r[0], r[1]), if (aktif) "aktif" else "kayıtlı (durum %02X)".format(r[2]), aktif)
+    }
+}
+
+// ---------------------------------------------------------------- beyin kimligi
+
+fun asciiParcalari(v: IntArray, bas: Int, boy: Int): List<String> =
+    v.drop(bas).chunked(boy).map { p -> p.map { it.toChar() }.joinToString("").filter { it.code in 33..126 } }
+        .filter { it.isNotEmpty() }

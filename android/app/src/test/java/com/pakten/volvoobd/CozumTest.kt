@@ -40,4 +40,47 @@ class CozumTest {
         val volt = PIDLER.first { it.kod == 0x42 }.coz(intArrayOf(0x37, 0x46))
         assertEquals(14.15, volt, 0.01)
     }
+
+    @Test
+    fun cokluPid() {
+        val r = isoTpCoz(listOf("7E8 10 0B 41 0C 1A F8 0D 40", "7E8 21 05 7B 42 37 46 00 00"))
+        val c = cokluCoz(r["7E8"]!!, 0x41)
+        assertEquals(listOf(0x1A, 0xF8), c[0x0C]!!.toList())
+        assertEquals(listOf(0x40), c[0x0D]!!.toList())
+        assertEquals(listOf(0x7B), c[0x05]!!.toList())
+        assertEquals(listOf(0x37, 0x46), c[0x42]!!.toList())
+    }
+
+    @Test
+    fun donmusKare() {
+        val c = cokluCoz(intArrayOf(0x42, 0x02, 0x00, 0x01, 0x71), 0x42, kareBayti = true)
+        assertEquals("P0171", dtcCoz(c[0x02]!![0], c[0x02]!![1]))
+    }
+
+    @Test
+    fun hazirlik() {
+        // A=81 (lamba + 1 kod), B=07 (3 ortak test destekli, hepsi tamam), C=65 (katalizor, EVAP, O2, O2 isitici), D=04 (EVAP eksik)
+        val l = hazirlikCoz(intArrayOf(0x81, 0x07, 0x65, 0x04))
+        assertEquals(7, l.size)
+        assertEquals(listOf("Yakıt buharı (EVAP)"), l.filter { !it.tamam }.map { it.ad })
+    }
+
+    @Test
+    fun mod06Tekleme() {
+        val v = intArrayOf(0x46, 0xA4, 0x0B, 0x24, 0x00, 0x09, 0x00, 0x00, 0xFF, 0xFF,
+            0xA4, 0x0C, 0x24, 0x00, 0x04, 0x00, 0x00, 0xFF, 0xFF)
+        val t = mod06Coz(v)
+        assertEquals(9, t.first { it.tid == 0x0B }.deger)
+        assertEquals(4, t.first { it.tid == 0x0C }.deger)
+    }
+
+    @Test
+    fun udsGecmis() {
+        val k = uds19Coz(intArrayOf(0x59, 0x02, 0xFF, 0x01, 0x71, 0x00, 0x09, 0x03, 0x03, 0x00, 0x28))!!
+        assertEquals("P0171-00", k[0].kod)
+        assertEquals(true, k[0].aktif)
+        assertEquals("P0303-00", k[1].kod)
+        assertEquals(false, k[1].aktif)
+        assertEquals(null, uds19Coz(intArrayOf(0x7F, 0x19, 0x11)))
+    }
 }

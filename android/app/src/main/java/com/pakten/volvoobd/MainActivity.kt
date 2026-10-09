@@ -45,6 +45,7 @@ import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.AlertDialog
@@ -87,10 +88,10 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import java.util.Locale
 
-private val Lacivert = Color(0xFF1C3F6E)
-private val Kirmizi = Color(0xFFC62828)
-private val Yesil = Color(0xFF2E7D32)
-private val Gri = Color(0xFF5F6368)
+internal val Lacivert = Color(0xFF1C3F6E)
+internal val Kirmizi = Color(0xFFC62828)
+internal val Yesil = Color(0xFF2E7D32)
+internal val Gri = Color(0xFF5F6368)
 
 class MainActivity : ComponentActivity() {
     private val model: AracModel by viewModels()
@@ -117,6 +118,7 @@ private class Sekme(val ad: String, val ikon: ImageVector)
 private val SEKMELER = listOf(
     Sekme("Bağlantı", Icons.Filled.Link),
     Sekme("Gösterge", Icons.Filled.Speed),
+    Sekme("Performans", Icons.Filled.Timer),
     Sekme("Arızalar", Icons.Filled.Warning),
     Sekme("Kayıt", Icons.Filled.FiberManualRecord),
 )
@@ -143,8 +145,9 @@ private fun Uygulama(m: AracModel) {
             when (sekme) {
                 0 -> BaglantiEkrani(m) { sekme = 1 }
                 1 -> GostergeEkrani(m)
-                2 -> ArizaEkrani(m)
-                3 -> KayitEkrani(m)
+                2 -> PerformansEkrani(m)
+                3 -> ArizaEkrani(m)
+                4 -> KayitEkrani(m)
             }
         }
     }
@@ -210,6 +213,19 @@ private fun BaglantiEkrani(m: AracModel, gostergeyeGec: () -> Unit) {
                     Bilgi("Protokol", m.protokol)
                     Bilgi("Yanıt veren modüller", m.moduller.joinToString().ifEmpty { "-" })
                     Bilgi("Desteklenen canlı veri", "${PIDLER.count { it.kod in m.destek }} / ${PIDLER.size}")
+                    Bilgi("Sorgu modu", if (m.hizliSorgu) "Hızlı (6 değer tek istekte)" else "Tekli")
+                    m.kimlikler.forEach { k ->
+                        Spacer(Modifier.height(10.dp))
+                        Text(k.modul + if (k.ad.isNotEmpty()) " · ${k.ad}" else "", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                        Bilgi("Yazılım (kalibrasyon) no", k.kalibrasyon.joinToString().ifEmpty { "okunamadı" })
+                        Bilgi("CVN (yazılım imzası)", k.cvn.joinToString().ifEmpty { "okunamadı" })
+                    }
+                    if (m.kimlikler.isNotEmpty()) {
+                        Text(
+                            "Yazılım numarasını ve CVN'i not edin: yazılım değişirse CVN de değişir. Tuner bu numaraya göre dosya hazırlar.",
+                            fontSize = 12.sp, color = Gri, modifier = Modifier.padding(top = 6.dp),
+                        )
+                    }
                     Spacer(Modifier.height(12.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(onClick = gostergeyeGec) { Text("Göstergeye geç") }
@@ -390,6 +406,9 @@ private fun ArizaEkrani(m: AracModel) {
             }
         }
         m.hata?.let { item { Text(it, color = Kirmizi) } }
+        if (m.kodlar == null && m.taramaArsivi.isNotEmpty()) {
+            item { Text("Önceki taramalar aşağıda. Güncel durum için taramayı başlatın.", color = Gri, fontSize = 13.sp) }
+        }
         m.arizaLambasi?.let { mil ->
             item {
                 Kart(arka = if (mil) Color(0xFFFDECEA) else Color(0xFFE8F5E9)) {
@@ -414,6 +433,8 @@ private fun ArizaEkrani(m: AracModel) {
                 }
             }
         }
+        if (m.kodlar != null) gecmisBolumleri(m)
+        arsivBolumu(m)
         item {
             Text(
                 "Bu tarama OBD standardını konuşan modülleri kapsar (motor, şanzıman). ABS, airbag, klima ve kapı " +
@@ -441,7 +462,7 @@ private fun ArizaEkrani(m: AracModel) {
 }
 
 @Composable
-private fun KodGrubu(baslik: String, kodlar: List<String>) {
+internal fun KodGrubu(baslik: String, kodlar: List<String>) {
     if (kodlar.isEmpty()) return
     Spacer(Modifier.height(8.dp))
     Text(baslik, fontSize = 13.sp, color = Gri, fontWeight = FontWeight.SemiBold)
@@ -511,7 +532,7 @@ private fun KayitEkrani(m: AracModel) {
 }
 
 @Composable
-private fun Grafik(baslik: String, degerler: List<Float>, renk: Color) {
+internal fun Grafik(baslik: String, degerler: List<Float>, renk: Color) {
     Kart {
         val enAz = degerler.min()
         val enCok = degerler.max()
@@ -537,7 +558,7 @@ private fun Grafik(baslik: String, degerler: List<Float>, renk: Color) {
 // ------------------------------------------------------------------ ortak
 
 @Composable
-private fun Kart(modifier: Modifier = Modifier, arka: Color = Color.White, icerik: @Composable () -> Unit) {
+internal fun Kart(modifier: Modifier = Modifier, arka: Color = Color.White, icerik: @Composable () -> Unit) {
     Card(
         modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = arka),
@@ -548,12 +569,12 @@ private fun Kart(modifier: Modifier = Modifier, arka: Color = Color.White, iceri
 }
 
 @Composable
-private fun Baslik(s: String) {
+internal fun Baslik(s: String) {
     Text(s, fontWeight = FontWeight.Bold, fontSize = 16.sp, modifier = Modifier.padding(bottom = 6.dp))
 }
 
 @Composable
-private fun Bilgi(etiket: String, deger: String) {
+internal fun Bilgi(etiket: String, deger: String) {
     Row(Modifier.padding(vertical = 3.dp)) {
         Text(etiket, color = Gri, fontSize = 14.sp, modifier = Modifier.width(180.dp))
         Text(deger, fontSize = 14.sp, fontWeight = FontWeight.Medium)
@@ -562,7 +583,7 @@ private fun Bilgi(etiket: String, deger: String) {
 }
 
 @Composable
-private fun BosEkran(yazi: String) {
+internal fun BosEkran(yazi: String) {
     Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
         Text(yazi, color = Gri)
     }

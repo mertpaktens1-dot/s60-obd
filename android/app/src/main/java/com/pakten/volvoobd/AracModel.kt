@@ -18,6 +18,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
 import java.io.PrintWriter
 import java.text.SimpleDateFormat
@@ -35,6 +37,24 @@ class ModulKodlari(
     val kalici: List<String>,
 )
 
+class ModulKimlik(val modul: String, val ad: String, val kalibrasyon: List<String>, val cvn: List<String>)
+
+class SilinmeBilgisi(
+    val kmSilindiginden: Int?,
+    val isinmaSilindiginden: Int?,
+    val dakikaSilindiginden: Int?,
+    val kmLambaYanarken: Int?,
+    val dakikaLambaYanarken: Int?,
+)
+
+class DonmusKare(val kod: String, val degerler: List<Pair<String, String>>)
+
+class ModulGecmisi(val modul: String, val yontem: String, val kodlar: List<GecmisKod>)
+
+class TaramaKaydi(val tarih: String, val ozet: List<String>)
+
+class CekisNoktasi(val devir: Float, val turbo: Float, val avans: Float, val emme: Float)
+
 class AracModel(app: Application) : AndroidViewModel(app) {
     var durum by mutableStateOf(Durum.YOK); private set
     var demo by mutableStateOf(false); private set
@@ -48,11 +68,21 @@ class AracModel(app: Application) : AndroidViewModel(app) {
     var adaptor by mutableStateOf(""); private set
     var protokol by mutableStateOf(""); private set
     var moduller by mutableStateOf<List<String>>(emptyList()); private set
+    var kimlikler by mutableStateOf<List<ModulKimlik>>(emptyList()); private set
+    var hizliSorgu by mutableStateOf(true); private set
 
+    // ariza ve gecmis
     var kodlar by mutableStateOf<List<ModulKodlari>?>(null); private set
     var arizaLambasi by mutableStateOf<Boolean?>(null); private set
     var taraniyor by mutableStateOf(false); private set
+    var hazirlik by mutableStateOf<List<Monitor>>(emptyList()); private set
+    var silinme by mutableStateOf<SilinmeBilgisi?>(null); private set
+    var donmusKare by mutableStateOf<DonmusKare?>(null); private set
+    var tekleme by mutableStateOf<List<Pair<Int, Pair<Int?, Int?>>>>(emptyList()); private set
+    var modulGecmisi by mutableStateOf<List<ModulGecmisi>>(emptyList()); private set
+    val taramaArsivi = mutableStateListOf<TaramaKaydi>()
 
+    // kayit
     var kayitAktif by mutableStateOf(false); private set
     var kayitSaniye by mutableStateOf(0); private set
     var sonKayit by mutableStateOf<File?>(null); private set
@@ -60,6 +90,20 @@ class AracModel(app: Application) : AndroidViewModel(app) {
     val grafikDevir = mutableStateListOf<Float>()
     val grafikTurbo = mutableStateListOf<Float>()
     val grafikSu = mutableStateListOf<Float>()
+
+    // performans
+    var perfModu by mutableStateOf(false); private set
+    var perfDurum by mutableStateOf("Performans modunu açın."); private set
+    var sure0100 by mutableStateOf<Double?>(null); private set
+    var enIyi0100 by mutableStateOf<Double?>(null); private set
+    var sure80120 by mutableStateOf<Double?>(null); private set
+    var enIyi80120 by mutableStateOf<Double?>(null); private set
+    var tepeTurbo by mutableStateOf<Double?>(null); private set
+    var tepeEmme by mutableStateOf<Double?>(null); private set
+    var enDusukAvansYukte by mutableStateOf<Double?>(null); private set
+    var tepeDevir by mutableStateOf<Double?>(null); private set
+    var sonCekis by mutableStateOf<List<CekisNoktasi>>(emptyList()); private set
+    var olcumAraligiMs by mutableStateOf(0); private set
 
     private var elm: Elm? = null
     private var dongu: Job? = null
@@ -69,6 +113,11 @@ class AracModel(app: Application) : AndroidViewModel(app) {
     private var yazici: PrintWriter? = null
     private var kayitBaslangic = 0L
     private val ornekler = mutableListOf<Map<String, Double>>()
+    private val arsivDosyasi = File(app.filesDir, "tarama_arsivi.json")
+
+    init {
+        arsivYukle()
+    }
 
     private fun yaz(s: String) {
         gunluk += s
@@ -113,8 +162,24 @@ class AracModel(app: Application) : AndroidViewModel(app) {
     private suspend fun aracBilgisiOku(e: Elm) {
         // Toplu istek: yanit veren tum OBD modullerini listele.
         e.hedef("7DF")
-        moduller = e.iste("0100", 3000).keys.map { modulAdi(it) }
+        val yanit = e.iste("0100", 3000)
+        moduller = yanit.keys.map { modulAdi(it) }
         yaz("Yanıt veren modüller: ${moduller.joinToString()}")
+
+        // Beyin yazilim kimligi: kalibrasyon numarasi (yazilim surumu) ve CVN (yazilim imzasi).
+        val adlar = e.iste("090A", 4000)
+        val calid = e.iste("0904", 4000)
+        val cvn = e.iste("0906", 4000)
+        kimlikler = yanit.keys.map { h ->
+            ModulKimlik(
+                modulAdi(h),
+                adlar[h]?.takeIf { it.size > 3 && it[0] == 0x49 }?.let { asciiParcalari(it, 3, 20).joinToString(" ") }.orEmpty(),
+                calid[h]?.takeIf { it.size > 3 && it[0] == 0x49 }?.let { asciiParcalari(it, 3, 16) }.orEmpty(),
+                cvn[h]?.takeIf { it.size > 3 && it[0] == 0x49 }?.let { v ->
+                    v.drop(3).chunked(4).filter { it.size == 4 }.map { p -> p.joinToString("") { "%02X".format(it) } }
+                }.orEmpty(),
+            )
+        }
 
         e.hedef("7E0")
         val pidler = mutableSetOf<Int>()
@@ -138,6 +203,10 @@ class AracModel(app: Application) : AndroidViewModel(app) {
             vin = v.takeLast(17).map { it.toChar() }.joinToString("").filter { it.isLetterOrDigit() }
             if (vin.isNotEmpty()) yaz("Şasi no: $vin")
         }
+
+        // Tek istekte 6 PID (ISO 15765-4 zorunlu kilar); desteklemeyen beyinde tekli sorguya donulur.
+        hizliSorgu = e.can && cokluOku(e, listOf(0x0C, 0x0D, 0x05)).size >= 2
+        yaz(if (hizliSorgu) "Hızlı (çoklu) sorgu açık." else "Hızlı sorgu desteklenmiyor, tekli sorgu kullanılacak.")
     }
 
     private fun motorYaniti(cevap: Map<String, IntArray>): IntArray? = cevap["7E8"] ?: cevap.values.firstOrNull()
@@ -148,6 +217,23 @@ class AracModel(app: Application) : AndroidViewModel(app) {
         return runCatching { p.coz(v.copyOfRange(2, v.size)) }.getOrNull()
     }
 
+    /** En fazla 6 PID'i tek istekte okur, ham veri baytlarini dondurur. */
+    private suspend fun cokluOku(e: Elm, kodlar: List<Int>): Map<Int, IntArray> {
+        val v = motorYaniti(e.iste("01" + kodlar.joinToString("") { "%02X".format(it) })) ?: return emptyMap()
+        return cokluCoz(v, 0x41)
+    }
+
+    private suspend fun pidleriOku(e: Elm, secim: List<Pid>) {
+        if (hizliSorgu) {
+            for (grup in secim.chunked(6)) {
+                val ham = cokluOku(e, grup.map { it.kod })
+                for (p in grup) ham[p.kod]?.let { d -> runCatching { p.coz(d) }.getOrNull()?.let { canli[p.kod] = it } }
+            }
+        } else {
+            for (p in secim) pidOku(e, p)?.let { canli[p.kod] = it }
+        }
+    }
+
     fun demoBaslat() {
         if (durum != Durum.YOK) return
         demo = true
@@ -155,6 +241,10 @@ class AracModel(app: Application) : AndroidViewModel(app) {
         yaz("Demo modu: sahte veri gösteriliyor, araca bağlı değil.")
         adaptor = "DEMO"; protokol = "ISO 15765-4 (CAN 11/500)"; vin = "YV1FS40DEMO000000"
         moduller = listOf("Motor (ECM)", "Şanzıman (TCM)")
+        kimlikler = listOf(
+            ModulKimlik("Motor (ECM)", "ECM-EngineControl", listOf("DEMO31459999AA"), listOf("1A2B3C4D")),
+            ModulKimlik("Şanzıman (TCM)", "TCM-TransmissionCtl", listOf("DEMO31256666"), listOf("0F0E0D0C")),
+        )
         destek = PIDLER.map { it.kod }.toSet()
         durum = Durum.BAGLI
         donguBaslat()
@@ -165,6 +255,7 @@ class AracModel(app: Application) : AndroidViewModel(app) {
         dongu?.cancel(); dongu = null
         elm?.kapat(); elm = null
         demo = false
+        perfModu = false
         durum = Durum.YOK
         canli.clear(); turbo = null
     }
@@ -175,29 +266,38 @@ class AracModel(app: Application) : AndroidViewModel(app) {
 
     // ------------------------------------------------------------ canli veri
 
+    // Performans modunda yalnizca bunlar okunur: hiz, devir, manifold, gaz, avans, emme havasi.
+    private val PERF_PIDLER = listOf(0x0D, 0x0C, 0x0B, 0x11, 0x0E, 0x0F)
+
     private fun donguBaslat() {
         dongu?.cancel()
         dongu = viewModelScope.launch {
-            val secili = PIDLER.filter { it.kod in destek && it.kod != 0x33 }
             var tur = 0
             val baslangic = System.currentTimeMillis()
+            var oncekiZaman = System.currentTimeMillis()
             while (isActive) {
                 try {
                     if (demo) {
                         demoOlcum((System.currentTimeMillis() - baslangic) / 1000.0)
-                        delay(300)
+                        delay(if (perfModu) 120 else 300)
                     } else {
                         val e = elm ?: break
                         islem.withLock {
-                            for (p in secili) {
-                                if (!p.hizli && tur % 5 != 0) continue
-                                pidOku(e, p)?.let { canli[p.kod] = it }
+                            val secili = if (perfModu) {
+                                PIDLER.filter { it.kod in PERF_PIDLER && it.kod in destek }
+                            } else {
+                                PIDLER.filter { it.kod in destek && it.kod != 0x33 && (it.hizli || tur % 5 == 0) }
                             }
+                            pidleriOku(e, secili)
                         }
-                        delay(50)
+                        if (!perfModu) delay(50)
                     }
+                    val simdi = System.currentTimeMillis()
+                    olcumAraligiMs = (simdi - oncekiZaman).toInt()
+                    oncekiZaman = simdi
                     canli[0x0B]?.let { turbo = (it - atmosfer) / 100.0 }
                     tur++
+                    if (perfModu) perfIsle(simdi / 1000.0)
                     if (kayitAktif) satirYaz()
                 } catch (ex: Exception) {
                     hata = "Bağlantı koptu: ${ex.message}"
@@ -212,12 +312,12 @@ class AracModel(app: Application) : AndroidViewModel(app) {
     private fun demoOlcum(t: Double) {
         val h = (sin(t / 8) + 1) / 2
         canli[0x0C] = 800 + h * 3800 + Random.nextDouble(-40.0, 40.0)
-        canli[0x0D] = h * 110
+        canli[0x0D] = if (h < 0.05) 0.0 else h * 130
         canli[0x0B] = 35 + h * 140
         canli[0x05] = minOf(91.0, 30 + t * 2)
         canli[0x42] = 14.1 + Random.nextDouble(-0.08, 0.08)
         canli[0x04] = 18 + h * 70
-        canli[0x11] = 12 + h * 75
+        canli[0x11] = 12 + h * 85
         canli[0x10] = 3 + h * 80
         canli[0x0F] = 28 + h * 8
         canli[0x0E] = 18 - h * 10
@@ -228,7 +328,108 @@ class AracModel(app: Application) : AndroidViewModel(app) {
         canli[0x46] = 18.0
     }
 
-    // ------------------------------------------------------------ ariza kodlari
+    // ------------------------------------------------------------ performans
+
+    private enum class Kronometre { BEKLE, HAZIR, OLCUYOR }
+
+    private var k0100 = Kronometre.BEKLE
+    private var bas0100 = 0.0
+    private var sonDurmaZamani = 0.0
+    private var bas80120: Double? = null
+    private var oncekiHiz: Double? = null
+    private var oncekiZamanSn = 0.0
+    private val cekis = mutableListOf<CekisNoktasi>()
+    private var cekisBaslangic = 0.0
+
+    fun perfAcKapa() {
+        perfModu = !perfModu
+        k0100 = Kronometre.BEKLE
+        bas80120 = null
+        oncekiHiz = null
+        cekis.clear()
+        perfDurum = if (perfModu) "Aracı tam durdurun." else "Performans modunu açın."
+    }
+
+    fun tepeleriSifirla() {
+        tepeTurbo = null; tepeEmme = null; enDusukAvansYukte = null; tepeDevir = null
+        sure0100 = null; sure80120 = null; sonCekis = emptyList()
+    }
+
+    /** Iki ornek arasinda [esik] hizinin gecildigi ani dogrusal olarak bulur. */
+    private fun kesisim(t0: Double, h0: Double, t1: Double, h1: Double, esik: Double) =
+        if (h1 == h0) t1 else t0 + (esik - h0) / (h1 - h0) * (t1 - t0)
+
+    private fun perfIsle(t: Double) {
+        val hiz = canli[0x0D] ?: return
+        val devir = canli[0x0C]
+        val gaz = canli[0x11] ?: 0.0
+        val avans = canli[0x0E]
+        val emme = canli[0x0F]
+        val tb = turbo
+
+        tb?.let { if (tepeTurbo == null || it > tepeTurbo!!) tepeTurbo = it }
+        emme?.let { if (tepeEmme == null || it > tepeEmme!!) tepeEmme = it }
+        devir?.let { if (tepeDevir == null || it > tepeDevir!!) tepeDevir = it }
+        if (gaz >= 85 && avans != null && (enDusukAvansYukte == null || avans < enDusukAvansYukte!!)) {
+            enDusukAvansYukte = avans
+        }
+
+        // 0-100
+        when (k0100) {
+            Kronometre.BEKLE -> if (hiz == 0.0) { k0100 = Kronometre.HAZIR; sonDurmaZamani = t; perfDurum = "Hazır: gaza basın." }
+            Kronometre.HAZIR -> if (hiz == 0.0) {
+                sonDurmaZamani = t
+            } else {
+                // Hareketin son "0" ornegiyle ilk hareketli ornek arasinda basladigi varsayilir.
+                bas0100 = (sonDurmaZamani + t) / 2
+                k0100 = Kronometre.OLCUYOR
+                perfDurum = "0-100 ölçülüyor..."
+            }
+            Kronometre.OLCUYOR -> {
+                val ph = oncekiHiz ?: 0.0
+                if (hiz >= 100) {
+                    val s = kesisim(oncekiZamanSn, ph, t, hiz, 100.0) - bas0100
+                    sure0100 = s
+                    if (enIyi0100 == null || s < enIyi0100!!) enIyi0100 = s
+                    k0100 = Kronometre.BEKLE
+                    perfDurum = "0-100: %.2f sn. Yeni ölçüm için tam durun.".format(Locale.US, s)
+                } else if (hiz == 0.0) {
+                    k0100 = Kronometre.HAZIR; sonDurmaZamani = t; perfDurum = "İptal. Hazır: gaza basın."
+                } else if (t - bas0100 > 30) {
+                    k0100 = Kronometre.BEKLE; perfDurum = "Süre aşıldı, tam durun."
+                }
+            }
+        }
+
+        // 80-120 (vitesi sabit tutarak ara hizlanma)
+        oncekiHiz?.let { ph ->
+            val b = bas80120
+            if (b == null && ph < 80 && hiz >= 80) bas80120 = kesisim(oncekiZamanSn, ph, t, hiz, 80.0)
+            if (b != null) {
+                if (ph < 120 && hiz >= 120) {
+                    val s = kesisim(oncekiZamanSn, ph, t, hiz, 120.0) - b
+                    sure80120 = s
+                    if (enIyi80120 == null || s < enIyi80120!!) enIyi80120 = s
+                    bas80120 = null
+                } else if (hiz < 75 || t - b > 25) {
+                    bas80120 = null
+                }
+            }
+        }
+        oncekiHiz = hiz
+        oncekiZamanSn = t
+
+        // Tam gaz cekisi: gaz %85 ustu ve 1500 rpm ustundeyken noktalari topla.
+        if (gaz >= 85 && (devir ?: 0.0) > 1500 && tb != null) {
+            if (cekis.isEmpty()) cekisBaslangic = t
+            cekis += CekisNoktasi(devir!!.toFloat(), tb.toFloat(), (avans ?: 0.0).toFloat(), (emme ?: 0.0).toFloat())
+        } else if (gaz < 70 && cekis.isNotEmpty()) {
+            if (t - cekisBaslangic >= 1.5 && cekis.size >= 5) sonCekis = cekis.toList()
+            cekis.clear()
+        }
+    }
+
+    // ------------------------------------------------------------ ariza kodlari ve gecmis
 
     fun kodlariTara() {
         if (taraniyor || durum != Durum.BAGLI) return
@@ -236,25 +437,13 @@ class AracModel(app: Application) : AndroidViewModel(app) {
         hata = null
         viewModelScope.launch {
             try {
-                if (demo) {
-                    delay(800)
-                    arizaLambasi = true
-                    kodlar = listOf(
-                        ModulKodlari("Motor (ECM)", listOf("P0171"), listOf("P0455"), emptyList()),
-                        ModulKodlari("Şanzıman (TCM)", emptyList(), emptyList(), emptyList()),
-                    )
-                } else {
+                if (demo) demoTarama() else {
                     val e = elm ?: return@launch
                     islem.withLock {
-                        e.hedef("7E0")
-                        motorYaniti(e.iste("0101"))?.let { v ->
-                            if (v.size >= 3 && v[0] == 0x41) arizaLambasi = (v[2] and 0x80) != 0
-                        }
                         e.hedef("7DF")
                         val kayitli = e.iste("03", 4000)
                         val bekleyen = e.iste("07", 4000)
                         val kalici = e.iste("0A", 4000)
-                        e.hedef("7E0")
                         val tumu = (kayitli.keys + bekleyen.keys + kalici.keys).toSortedSet()
                         kodlar = tumu.map { h ->
                             ModulKodlari(
@@ -264,14 +453,96 @@ class AracModel(app: Application) : AndroidViewModel(app) {
                                 kalici[h]?.let { dtcListesi(it, e.can) }.orEmpty(),
                             )
                         }
+                        e.hedef("7E0")
+                        gecmisOku(e)
                     }
                 }
+                arsiveEkle()
             } catch (ex: Exception) {
                 hata = "Tarama başarısız: ${ex.message}"
             } finally {
+                runCatching { elm?.hedef("7E0") }
                 taraniyor = false
             }
         }
+    }
+
+    /** Silinmis / gecmis arizalara dair ne varsa: hazirlik testleri, sayaclar, donmus kare, mod 06, UDS. */
+    private suspend fun gecmisOku(e: Elm) {
+        motorYaniti(e.iste("0101"))?.let { v ->
+            if (v.size >= 6 && v[0] == 0x41 && v[1] == 0x01) {
+                arizaLambasi = (v[2] and 0x80) != 0
+                hazirlik = hazirlikCoz(v.copyOfRange(2, 6))
+            }
+        }
+
+        val sayac = listOf(0x31, 0x30, 0x4E, 0x21, 0x4D).filter { it in destek }
+        val ham = if (sayac.isEmpty()) emptyMap() else {
+            val v = motorYaniti(e.iste("01" + sayac.joinToString("") { "%02X".format(it) }))
+            v?.let { cokluCoz(it, 0x41) }.orEmpty()
+        }
+        fun iki(k: Int) = ham[k]?.takeIf { it.size == 2 }?.let { it[0] * 256 + it[1] }
+        silinme = SilinmeBilgisi(iki(0x31), ham[0x30]?.getOrNull(0), iki(0x4E), iki(0x21), iki(0x4D))
+
+        // Donmus kare (mod 02, kare 0): lambayi yaktiran kod ve o anki degerler.
+        donmusKare = null
+        val dk = motorYaniti(e.iste("020200"))?.let { cokluCoz(it, 0x42, kareBayti = true) }
+        val dkKod = dk?.get(0x02)?.takeIf { it[0] != 0 || it[1] != 0 }?.let { dtcCoz(it[0], it[1]) }
+        if (dkKod != null) {
+            val istenen = listOf(0x0C, 0x0D, 0x05, 0x04, 0x0B, 0x06, 0x07, 0x0F, 0x11).filter { it in destek }
+            val degerler = mutableListOf<Pair<String, String>>()
+            for (grup in istenen.chunked(3)) {
+                val istek = "02" + grup.joinToString("") { "%02X00".format(it) }
+                val r = motorYaniti(e.iste(istek))?.let { cokluCoz(it, 0x42, kareBayti = true) }.orEmpty()
+                for (k in grup) {
+                    val p = PIDLER.first { it.kod == k }
+                    r[k]?.let { d -> degerler += p.ad to "%.${p.ondalik}f %s".format(Locale.US, p.coz(d), p.birim) }
+                }
+            }
+            donmusKare = DonmusKare(dkKod, degerler)
+        }
+
+        // Mod 06: silindir bazinda tekleme sayaclari (MID A2..A5 = silindir 1..4).
+        tekleme = (0xA2..0xA5).mapNotNull { mid ->
+            val t = motorYaniti(e.iste("06%02X".format(mid)))?.let { mod06Coz(it) }.orEmpty().filter { it.mid == mid }
+            if (t.isEmpty()) null else (mid - 0xA1) to (t.firstOrNull { it.tid == 0x0C }?.deger to t.firstOrNull { it.tid == 0x0B }?.deger)
+        }
+
+        // Deneysel: UDS 19 02 / KWP 18 ile modulun kendi ariza hafizasi (gecmis kodlar dahil).
+        val gecmis = mutableListOf<ModulGecmisi>()
+        for ((adres, cevapAdresi) in listOf("7E0" to "7E8", "7E1" to "7E9")) {
+            e.hedef(adres)
+            val uds = e.iste("1902FF", 3000)[cevapAdresi]?.let { uds19Coz(it) }
+            if (uds != null) {
+                gecmis += ModulGecmisi(modulAdi(cevapAdresi), "UDS", uds); continue
+            }
+            val kwp = e.iste("1802FF00", 3000)[cevapAdresi]?.let { kwp18Coz(it) }
+            if (kwp != null) gecmis += ModulGecmisi(modulAdi(cevapAdresi), "KWP2000", kwp)
+        }
+        e.hedef("7E0")
+        modulGecmisi = gecmis
+    }
+
+    private suspend fun demoTarama() {
+        delay(800)
+        arizaLambasi = true
+        kodlar = listOf(
+            ModulKodlari("Motor (ECM)", listOf("P0171"), listOf("P0455"), emptyList()),
+            ModulKodlari("Şanzıman (TCM)", emptyList(), emptyList(), emptyList()),
+        )
+        hazirlik = listOf(
+            Monitor("Tekleme izleme", true), Monitor("Yakıt sistemi", true), Monitor("Bileşen izleme", true),
+            Monitor("Katalizör", false), Monitor("Yakıt buharı (EVAP)", false), Monitor("Oksijen sensörü", true),
+        )
+        silinme = SilinmeBilgisi(84, 3, 95, 12, 20)
+        donmusKare = DonmusKare("P0171", listOf("Devir" to "2150 rpm", "Hız" to "64 km/s", "Soğutma suyu" to "88 °C"))
+        tekleme = listOf(1 to (0 to 1), 2 to (0 to 0), 3 to (4 to 9), 4 to (0 to 0))
+        modulGecmisi = listOf(
+            ModulGecmisi("Motor (ECM)", "UDS", listOf(
+                GecmisKod("P0171-00", "şu an hatalı, onaylanmış, lamba yaktırıyor", true),
+                GecmisKod("P0303-00", "son silmeden beri hata vermiş", false),
+            )),
+        )
     }
 
     fun kodlariSil() {
@@ -293,6 +564,39 @@ class AracModel(app: Application) : AndroidViewModel(app) {
                 taraniyor = false
             }
             kodlariTara()
+        }
+    }
+
+    // ------------------------------------------------------------ tarama arsivi
+
+    private fun arsivYukle() {
+        runCatching {
+            if (!arsivDosyasi.exists()) return
+            val dizi = JSONArray(arsivDosyasi.readText())
+            for (i in 0 until dizi.length()) {
+                val o = dizi.getJSONObject(i)
+                val oz = o.getJSONArray("ozet")
+                taramaArsivi += TaramaKaydi(o.getString("tarih"), List(oz.length()) { oz.getString(it) })
+            }
+        }
+    }
+
+    private fun arsiveEkle() {
+        val satirlar = mutableListOf<String>()
+        kodlar?.forEach { mk ->
+            val tum = mk.kayitli.map { "$it (kayıtlı)" } + mk.bekleyen.map { "$it (bekleyen)" } + mk.kalici.map { "$it (kalıcı)" }
+            satirlar += "${mk.modul}: " + (if (tum.isEmpty()) "kod yok" else tum.joinToString())
+        }
+        modulGecmisi.forEach { g -> if (g.kodlar.isNotEmpty()) satirlar += "${g.modul} hafıza: " + g.kodlar.joinToString { it.kod } }
+        silinme?.kmSilindiginden?.let { satirlar += "Kodlar silineli $it km" }
+        if (satirlar.isEmpty()) return
+        val tarih = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale("tr")).format(Date()) + if (demo) " (demo)" else ""
+        taramaArsivi.add(0, TaramaKaydi(tarih, satirlar))
+        while (taramaArsivi.size > 100) taramaArsivi.removeAt(taramaArsivi.size - 1)
+        runCatching {
+            val dizi = JSONArray()
+            taramaArsivi.forEach { k -> dizi.put(JSONObject().put("tarih", k.tarih).put("ozet", JSONArray(k.ozet))) }
+            arsivDosyasi.writeText(dizi.toString())
         }
     }
 
