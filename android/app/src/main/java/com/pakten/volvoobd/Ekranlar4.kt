@@ -184,3 +184,65 @@ internal fun BenzinKarti(m: AracModel) {
         )
     }
 }
+
+// ------------------------------------------------------------------ surus kayitlari listesi
+
+/** "kayit_20261009_174512.csv" -> "09.10.2026 17:45" */
+private fun kayitTarihi(f: java.io.File): String {
+    val r = Regex("""(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})""").find(f.name) ?: return f.name
+    val (y, a, g, s, d) = r.destructured
+    return "$g.$a.$y $s:$d" + if ("_demo" in f.name) " (demo)" else ""
+}
+
+internal fun androidx.compose.foundation.lazy.LazyListScope.kayitListesi(m: AracModel, paylas: (java.io.File) -> Unit) {
+    // Sayac okunarak liste baslat / durdur / gonderimde yenilenir.
+    val dosyalar = m.kayitListesiSurumu.let { m.kayitDosyalari() }
+    if (dosyalar.isEmpty()) return
+    item { Baslik("Kayıtlar (${dosyalar.size})") }
+    items(dosyalar.size, key = { dosyalar[it].name }) { i ->
+        val f = dosyalar[i]
+        val suruyor = m.suruyorMu(f)
+        var notAcik by remember { mutableStateOf(false) }
+        var not by rememberSaveable(f.name) { mutableStateOf("") }
+        Kart(arka = if (suruyor) Color(0xFFFFF4E5) else Color.White) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        kayitTarihi(f) + if (suruyor) "  ● kayıt sürüyor" else "",
+                        fontWeight = FontWeight.SemiBold, fontSize = 14.sp,
+                        color = if (suruyor) Kirmizi else Color.Unspecified,
+                    )
+                    Text("%.0f KB".format(Locale.US, f.length() / 1024.0) + " · ${f.name}", fontSize = 12.sp, color = Gri)
+                }
+                if (m.csvGonderilen == f.name) {
+                    CircularProgressIndicator(Modifier.padding(end = 8.dp))
+                } else {
+                    Button(onClick = { notAcik = !notAcik }, enabled = m.csvGonderilen == null) { Text("Claude'a gönder") }
+                }
+                Spacer(Modifier.width(8.dp))
+                OutlinedButton(onClick = { paylas(f) }) { Text("Paylaş") }
+            }
+            if (notAcik) {
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    not, { not = it }, Modifier.fillMaxWidth(),
+                    label = { Text("Not (isteğe bağlı)") },
+                    placeholder = { Text("ör. 2. viteste tam gaz, 3000 devirde tekledi") },
+                    minLines = 2,
+                )
+                if (suruyor) {
+                    Text("Kayıt sürüyor: şu ana kadarki ölçümler gönderilir, kayıt devam eder.", fontSize = 12.sp, color = Gri)
+                }
+                Row(Modifier.padding(top = 6.dp)) {
+                    Button(onClick = { m.csvGonder(f, not); notAcik = false }, enabled = m.csvGonderilen == null) { Text("Gönder") }
+                    Spacer(Modifier.width(8.dp))
+                    TextButton(onClick = { notAcik = false }) { Text("Vazgeç") }
+                }
+            }
+            m.csvMesaj[f.name]?.let {
+                Text(it, fontSize = 13.sp, color = if (it.startsWith("Gönderildi")) Yesil else Kirmizi,
+                    modifier = Modifier.padding(top = 6.dp))
+            }
+        }
+    }
+}

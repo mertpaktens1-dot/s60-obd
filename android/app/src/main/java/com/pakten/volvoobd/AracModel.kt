@@ -670,6 +670,7 @@ class AracModel(app: Application) : AndroidViewModel(app) {
         kayitBaslangic = System.currentTimeMillis()
         kayitSaniye = 0
         kayitAktif = true
+        kayitListesiSurumu++
     }
 
     private fun satirYaz() {
@@ -693,6 +694,7 @@ class AracModel(app: Application) : AndroidViewModel(app) {
         if (!kayitAktif) return
         kayitAktif = false
         yazici?.close(); yazici = null
+        kayitListesiSurumu++
         ozet = degerlendir()
     }
 
@@ -1023,7 +1025,8 @@ class AracModel(app: Application) : AndroidViewModel(app) {
             5 -> {
                 o.put("ozet", JSONArray(ozet))
                 o.koy("kayit_aktif", kayitAktif)
-                sonKayit?.takeIf { it.exists() && !kayitAktif }?.let { f ->
+                if (kayitAktif) yazici?.flush()
+                sonKayit?.takeIf { it.exists() }?.let { f ->
                     o.put("csv_ad", f.name)
                     // Cok uzun kayitlarda sunucu sinirina takilmamak icin son ~3 MB.
                     val metin = f.readText()
@@ -1054,5 +1057,52 @@ class AracModel(app: Application) : AndroidViewModel(app) {
 
     fun gonderMesajiTemizle() {
         gonderMesaj = null
+    }
+
+    // ------------------------------------------------------------ surus kaydi CSV gonderimi
+
+    /** Kayit listesi her baslat / durdur / gonderimde yenilensin diye sayac. */
+    var kayitListesiSurumu by mutableStateOf(0); private set
+    var csvGonderilen by mutableStateOf<String?>(null); private set
+    val csvMesaj = mutableStateMapOf<String, String>()
+
+    /** Tum surus kayitlari, en yeni basta. */
+    fun kayitDosyalari(): List<File> {
+        val klasor = File(getApplication<Application>().getExternalFilesDir(null), "kayitlar")
+        return klasor.listFiles { f -> f.isFile && f.name.endsWith(".csv") }.orEmpty().sortedByDescending { it.lastModified() }
+    }
+
+    fun suruyorMu(f: File) = kayitAktif && f == sonKayit
+
+    /** Kaydin CSV'sini sunucuya yollar; suren kayitta o ana kadarki olcumler gider. */
+    fun csvGonder(f: File, not: String) {
+        if (csvGonderilen != null) return
+        csvGonderilen = f.name
+        csvMesaj.remove(f.name)
+        viewModelScope.launch {
+            try {
+                if (suruyorMu(f)) yazici?.flush()
+                val bayt = withContext(Dispatchers.IO) {
+                    val tum = f.readBytes()
+                    if (tum.size < Gonderici.AZAMI - 10_000) tum else {
+                        // Cok uzun kayitta baslik satiri + son ~4.4 MB
+                        val metin = String(tum)
+                        val baslik = metin.substringBefore('\n')
+                        (baslik + "\n" + metin.takeLast(Gonderici.AZAMI - 20_000).substringAfter('\n')).toByteArray()
+                    }
+                }
+                val ad = Gonderici.gonderHam("kayit_" + f.nameWithoutExtension + if (suruyorMu(f)) "_suruyor" else "", "csv", bayt, "text/csv")
+                if (not.isNotBlank()) {
+                    Gonderici.gonder("kayit_notu", JSONObject().put("csv", ad).put("not", not)
+                        .put("ozet", JSONArray(ozet)).toString(1))
+                }
+                csvMesaj[f.name] = "Gönderildi ✓ – Claude'a \"gönderdim\" yazın."
+            } catch (ex: Exception) {
+                csvMesaj[f.name] = "Gönderilemedi: ${ex.message}"
+            } finally {
+                csvGonderilen = null
+                kayitListesiSurumu++
+            }
+        }
     }
 }

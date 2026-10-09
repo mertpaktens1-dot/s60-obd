@@ -529,20 +529,14 @@ private fun KayitEkrani(m: AracModel) {
         if (m.grafikDevir.size > 2) item { Grafik("Devir (rpm)", m.grafikDevir, Lacivert) }
         if (m.grafikTurbo.size > 2) item { Grafik("Turbo basıncı (bar)", m.grafikTurbo, Color(0xFFE07A00)) }
         if (m.grafikSu.size > 2) item { Grafik("Soğutma suyu (°C)", m.grafikSu, Kirmizi) }
-        m.sonKayit?.takeIf { !m.kayitAktif && it.exists() }?.let { f ->
-            item {
-                OutlinedButton(onClick = {
-                    val uri = FileProvider.getUriForFile(c, "${c.packageName}.dosya", f)
-                    val i = Intent(Intent.ACTION_SEND).apply {
-                        type = "text/csv"
-                        putExtra(Intent.EXTRA_STREAM, uri)
-                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    }
-                    c.startActivity(Intent.createChooser(i, "Kaydı paylaş"))
-                }) {
-                    Icon(Icons.Filled.Share, null); Spacer(Modifier.width(8.dp)); Text("CSV'yi paylaş (${f.name})")
-                }
+        kayitListesi(m) { f ->
+            val uri = FileProvider.getUriForFile(c, "${c.packageName}.dosya", f)
+            val i = Intent(Intent.ACTION_SEND).apply {
+                type = "text/csv"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
+            c.startActivity(Intent.createChooser(i, "Kaydı paylaş"))
         }
     }
 }
