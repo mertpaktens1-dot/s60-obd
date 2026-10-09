@@ -45,6 +45,8 @@ import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.CloudUpload
+import androidx.compose.material3.IconButton
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Warning
@@ -146,7 +148,7 @@ private fun Uygulama(m: AracModel) {
         },
     ) { ic ->
         Column(Modifier.padding(ic).fillMaxSize()) {
-            UstBant(m)
+            UstBant(m, sekme)
             when (sekme) {
                 0 -> BaglantiEkrani(m) { sekme = 1 }
                 1 -> GostergeEkrani(m)
@@ -160,7 +162,9 @@ private fun Uygulama(m: AracModel) {
 }
 
 @Composable
-private fun UstBant(m: AracModel) {
+private fun UstBant(m: AracModel, sekme: Int) {
+    var gonderAcik by remember { mutableStateOf(false) }
+    if (gonderAcik) GonderPenceresi(m, sekme) { gonderAcik = false }
     val (renk, yazi) = when (m.durum) {
         Durum.BAGLI -> Yesil to (if (m.demo) "Demo modu" else "Bağlı · ${m.protokol}")
         Durum.BAGLANIYOR -> Color(0xFFE09A00) to "Bağlanıyor..."
@@ -178,6 +182,10 @@ private fun UstBant(m: AracModel) {
         if (m.kayitAktif) {
             Spacer(Modifier.width(12.dp))
             Text("● KAYIT ${m.kayitSaniye / 60}:%02d".format(m.kayitSaniye % 60), color = Color(0xFFFF8A80), fontSize = 13.sp)
+        }
+        Spacer(Modifier.width(4.dp))
+        IconButton(onClick = { m.gonderMesajiTemizle(); gonderAcik = true }) {
+            Icon(Icons.Filled.CloudUpload, "Claude'a gönder", tint = Color.White)
         }
     }
 }
@@ -235,7 +243,7 @@ private fun BaglantiEkrani(m: AracModel, gostergeyeGec: () -> Unit) {
                     Spacer(Modifier.height(12.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(onClick = gostergeyeGec) { Text("Göstergeye geç") }
-                        OutlinedButton(onClick = { m.kopar() }) { Text("Bağlantıyı kes") }
+                        OutlinedButton(onClick = { m.kullaniciKopardi() }) { Text("Bağlantıyı kes") }
                     }
                 }
             }
@@ -316,6 +324,7 @@ private fun BaglantiEkrani(m: AracModel, gostergeyeGec: () -> Unit) {
         if (m.durum == Durum.BAGLANIYOR) {
             item { Row { CircularProgressIndicator(Modifier.size(24.dp)); Spacer(Modifier.width(12.dp)); Text("Bağlanıyor, 20 saniye sürebilir...") } }
         }
+        item { OtomatikKarti(m) }
         item { SurumKarti(m) }
         if (m.gunluk.isNotEmpty()) {
             item {

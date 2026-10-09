@@ -124,6 +124,22 @@ class AracModel(app: Application) : AndroidViewModel(app) {
     var indirmeYuzde by mutableStateOf<Int?>(null); private set
     private var inenApk: File? = null
 
+    // otomatik baglanma / kayit
+    private val ayarlar = app.getSharedPreferences("ayarlar", android.content.Context.MODE_PRIVATE)
+    var otoBaglan by mutableStateOf(ayarlar.getBoolean("oto_baglan", true)); private set
+    var otoKayit by mutableStateOf(ayarlar.getBoolean("oto_kayit", false)); private set
+    var sonCihazAdi by mutableStateOf(ayarlar.getString("son_cihaz_adi", null)); private set
+    private var elleKesildi = false
+    private var otoKayitBaslatti = false
+    private var devirSifirSaniye = 0.0
+
+    // benzin kalitesi
+    val benzin = BenzinTakip(File(app.filesDir, "benzin.json"))
+
+    // Claude'a gonder
+    var gonderMesaj by mutableStateOf<String?>(null); private set
+    var gonderiliyor by mutableStateOf(false); private set
+
     private var elm: Elm? = null
     private var dongu: Job? = null
     // Canli veri dongusu ile ariza taramasi ayni anda adaptoru kullanmasin (baslik degisiyor).
@@ -136,6 +152,7 @@ class AracModel(app: Application) : AndroidViewModel(app) {
 
     init {
         arsivYukle()
+        otoBaglanmaDongusu()
     }
 
     private fun yaz(s: String) {
@@ -147,13 +164,17 @@ class AracModel(app: Application) : AndroidViewModel(app) {
 
     @SuppressLint("MissingPermission")
     fun bluetoothIleBaglan(cihaz: BluetoothDevice) =
-        baglan("${cihaz.name ?: cihaz.address}") { bluetoothBaglan(cihaz) }
+        baglan("${cihaz.name ?: cihaz.address}", basarili = {
+            sonCihazAdi = cihaz.name ?: cihaz.address
+            ayarlar.edit().putString("son_cihaz", cihaz.address).putString("son_cihaz_adi", sonCihazAdi).apply()
+        }) { bluetoothBaglan(cihaz) }
 
     fun wifiIleBaglan(adres: String, port: Int) = baglan("$adres:$port") { wifiBaglan(adres, port) }
 
-    private fun baglan(ad: String, ac: () -> Tasima) {
+    private fun baglan(ad: String, basarili: () -> Unit = {}, ac: () -> Tasima) {
         if (durum != Durum.YOK) return
         durum = Durum.BAGLANIYOR
+        elleKesildi = false
         hata = null
         gunluk.clear()
         yaz("$ad cihazına bağlanılıyor...")
@@ -169,6 +190,7 @@ class AracModel(app: Application) : AndroidViewModel(app) {
                 aracBilgisiOku(e)
                 durum = Durum.BAGLI
                 yaz("Hazır.")
+                basarili()
                 donguBaslat()
             } catch (ex: Exception) {
                 hata = ex.message ?: ex.toString()
@@ -269,8 +291,17 @@ class AracModel(app: Application) : AndroidViewModel(app) {
         donguBaslat()
     }
 
+    /** Kullanici "Baglantiyi kes" dedi: otomatik yeniden baglanma bu oturumda durur. */
+    fun kullaniciKopardi() {
+        elleKesildi = true
+        kopar()
+    }
+
     fun kopar() {
         if (kayitAktif) kayitDurdur()
+        otoKayitBaslatti = false
+        devirSifirSaniye = 0.0
+        benzin.kaydet()
         dongu?.cancel(); dongu = null
         elm?.kapat(); elm = null
         demo = false
@@ -317,6 +348,8 @@ class AracModel(app: Application) : AndroidViewModel(app) {
                     canli[0x0B]?.let { turbo = (it - atmosfer) / 100.0 }
                     tur++
                     if (perfModu) perfIsle(simdi / 1000.0)
+                    if (!demo) benzin.isle(simdi / 1000.0, canli[0x0C], canli[0x11], canli[0x04], canli[0x0E], canli[0x0F])
+                    otoKayitIsle(olcumAraligiMs / 1000.0)
                     if (kayitAktif) satirYaz()
                 } catch (ex: Exception) {
                     hata = "Bağlantı koptu: ${ex.message}"
@@ -865,5 +898,161 @@ class AracModel(app: Application) : AndroidViewModel(app) {
                 indirmeYuzde = null
             }
         }
+    }
+
+    // ------------------------------------------------------------ otomatik baglanma / kayit
+
+    fun otoBaglanAyarla(acik: Boolean) {
+        otoBaglan = acik
+        ayarlar.edit().putBoolean("oto_baglan", acik).apply()
+    }
+
+    fun otoKayitAyarla(acik: Boolean) {
+        otoKayit = acik
+        ayarlar.edit().putBoolean("oto_kayit", acik).apply()
+    }
+
+    /** Uygulama acikken son kullanilan Bluetooth adaptore 15 saniyede bir baglanmayi dener. */
+    @SuppressLint("MissingPermission")
+    private fun otoBaglanmaDongusu() {
+        viewModelScope.launch {
+            delay(1500)
+            while (isActive) {
+                val adres = ayarlar.getString("son_cihaz", null)
+                if (otoBaglan && !elleKesildi && durum == Durum.YOK && !demo && adres != null) {
+                    val c = getApplication<Application>()
+                    val izin = android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.S ||
+                        androidx.core.content.ContextCompat.checkSelfPermission(c, android.Manifest.permission.BLUETOOTH_CONNECT) ==
+                        android.content.pm.PackageManager.PERMISSION_GRANTED
+                    val bt = (c.getSystemService(android.content.Context.BLUETOOTH_SERVICE) as android.bluetooth.BluetoothManager).adapter
+                    if (izin && bt != null && bt.isEnabled) {
+                        bt.bondedDevices.orEmpty().firstOrNull { it.address == adres }?.let { bluetoothIleBaglan(it) }
+                    }
+                }
+                delay(15_000)
+            }
+        }
+    }
+
+    /** Motor calisinca kaydi baslatir, 30 sn devir 0 kalinca durdurur (yalnizca kendi baslattigi kaydi). */
+    private fun otoKayitIsle(aralikSn: Double) {
+        if (demo) return
+        val devir = canli[0x0C] ?: 0.0
+        if (otoKayit && !kayitAktif && devir > 400) {
+            kayitBaslat()
+            otoKayitBaslatti = true
+            devirSifirSaniye = 0.0
+        } else if (kayitAktif && otoKayitBaslatti) {
+            devirSifirSaniye = if (devir < 100) devirSifirSaniye + aralikSn else 0.0
+            if (devirSifirSaniye > 30) {
+                kayitDurdur()
+                otoKayitBaslatti = false
+            }
+        }
+    }
+
+    // ------------------------------------------------------------ Claude'a gonder
+
+    private fun JSONObject.koy(ad: String, deger: Any?): JSONObject = put(ad, deger ?: JSONObject.NULL)
+
+    /** O an acik sekmenin verisini JSON olarak toplar. */
+    private fun anlikGoruntu(sekme: Int, not: String): JSONObject {
+        val c = getApplication<Application>()
+        val o = JSONObject()
+            .koy("zaman", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date()))
+            .koy("surum", Guncelleme.mevcutSurum(c))
+            .koy("sekme", listOf("baglanti", "gosterge", "performans", "arizalar", "moduller", "kayit").getOrElse(sekme) { "?" })
+            .koy("not", not)
+            .koy("durum", durum.name).koy("demo", demo)
+            .koy("vin", vin).koy("adaptor", adaptor).koy("protokol", protokol)
+            .koy("moduller", JSONArray(moduller))
+        o.put("canli", JSONObject().apply {
+            PIDLER.forEach { p -> canli[p.kod]?.let { put(p.kolon, "%.${p.ondalik}f".format(Locale.US, it)) } }
+            turbo?.let { put("turbo_bar", "%.2f".format(Locale.US, it)) }
+        })
+        hata?.let { o.put("hata", it) }
+        when (sekme) {
+            0 -> {
+                o.put("gunluk", JSONArray(gunluk.toList()))
+                o.put("kimlikler", JSONArray(kimlikler.map {
+                    JSONObject().put("modul", it.modul).put("ad", it.ad).put("calid", JSONArray(it.kalibrasyon)).put("cvn", JSONArray(it.cvn))
+                }))
+                o.put("destek", JSONArray(destek.sorted().map { "%02X".format(it) }))
+                o.put("hizli_sorgu", hizliSorgu)
+            }
+            2 -> {
+                o.koy("sure0100", sure0100).koy("eniyi0100", enIyi0100).koy("sure80120", sure80120).koy("eniyi80120", enIyi80120)
+                o.koy("tepe_turbo", tepeTurbo).koy("tepe_emme", tepeEmme).koy("min_avans_yukte", enDusukAvansYukte).koy("tepe_devir", tepeDevir)
+                o.put("son_cekis", JSONArray(sonCekis.map {
+                    JSONArray(listOf(it.devir.toDouble(), it.turbo.toDouble(), it.avans.toDouble(), it.emme.toDouble()))
+                }))
+                o.put("benzin_depolar", JSONArray(benzin.kayitlar.map { it.json() }))
+            }
+            3 -> {
+                o.koy("ariza_lambasi", arizaLambasi)
+                o.put("kodlar", JSONArray(kodlar.orEmpty().map {
+                    JSONObject().put("modul", it.modul).put("kayitli", JSONArray(it.kayitli))
+                        .put("bekleyen", JSONArray(it.bekleyen)).put("kalici", JSONArray(it.kalici))
+                }))
+                o.put("hazirlik", JSONArray(hazirlik.map { JSONObject().put("ad", it.ad).put("tamam", it.tamam) }))
+                silinme?.let {
+                    o.put("silinme", JSONObject().koy("km", it.kmSilindiginden).koy("isinma", it.isinmaSilindiginden)
+                        .koy("dakika", it.dakikaSilindiginden).koy("km_lamba", it.kmLambaYanarken).koy("dk_lamba", it.dakikaLambaYanarken))
+                }
+                donmusKare?.let { dk ->
+                    o.put("donmus_kare", JSONObject().put("kod", dk.kod).put("degerler", JSONObject(dk.degerler.toMap())))
+                }
+                o.put("tekleme", JSONArray(tekleme.map { (s, d) -> JSONObject().put("silindir", s).koy("bu", d.first).koy("ort10", d.second) }))
+                o.put("modul_gecmisi", JSONArray(modulGecmisi.map { g ->
+                    JSONObject().put("modul", g.modul).put("yontem", g.yontem)
+                        .put("kodlar", JSONArray(g.kodlar.map { "${it.kod} | ${it.durum}" }))
+                }))
+                o.put("arsiv", JSONArray(taramaArsivi.take(20).map { JSONObject().put("tarih", it.tarih).put("ozet", JSONArray(it.ozet)) }))
+            }
+            4 -> {
+                o.put("hat", volvoHat.name).koy("mesaj", volvoMesaj)
+                o.put("bulgular", JSONArray(volvoBulgular.map {
+                    JSONObject().put("modul", it.modul.kisa).put("adres", "%02X".format(it.modul.adres))
+                        .put("yanit", it.yanit).put("kimlik", it.kimlik).put("ham", it.ham)
+                }))
+                o.put("kodlar", JSONObject().apply {
+                    volvoKodlar.forEach { (a, k) -> put("%02X".format(a), JSONObject().put("kodlar", JSONArray(k.kodlar)).put("ham", k.ham).koy("not", k.not)) }
+                })
+                o.put("konsol", JSONArray(konsol.takeLast(120)))
+            }
+            5 -> {
+                o.put("ozet", JSONArray(ozet))
+                o.koy("kayit_aktif", kayitAktif)
+                sonKayit?.takeIf { it.exists() && !kayitAktif }?.let { f ->
+                    o.put("csv_ad", f.name)
+                    // Cok uzun kayitlarda sunucu sinirina takilmamak icin son ~3 MB.
+                    val metin = f.readText()
+                    o.put("csv", if (metin.length > 3_000_000) metin.lines().first() + "\n" + metin.takeLast(3_000_000).substringAfter('\n') else metin)
+                }
+            }
+        }
+        return o
+    }
+
+    fun claudeyaGonder(sekme: Int, not: String) {
+        if (gonderiliyor) return
+        gonderiliyor = true
+        gonderMesaj = null
+        viewModelScope.launch {
+            try {
+                val govde = withContext(Dispatchers.Default) { anlikGoruntu(sekme, not).toString(1) }
+                val ekran = listOf("baglanti", "gosterge", "performans", "arizalar", "moduller", "kayit").getOrElse(sekme) { "ekran" }
+                val ad = Gonderici.gonder(ekran, govde)
+                gonderMesaj = "Gönderildi ✓ ($ad). Claude'a \"gönderdim\" yazmanız yeterli."
+            } catch (ex: Exception) {
+                gonderMesaj = "Gönderilemedi: ${ex.message}"
+            } finally {
+                gonderiliyor = false
+            }
+        }
+    }
+
+    fun gonderMesajiTemizle() {
+        gonderMesaj = null
     }
 }

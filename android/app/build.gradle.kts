@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -13,8 +15,15 @@ android {
         applicationId = "com.pakten.volvoobd"
         minSdk = 26
         targetSdk = 36
-        versionCode = 4
-        versionName = "1.3.0"
+        versionCode = 5
+        versionName = "1.4.0"
+
+        // "Claude'a gonder" yukleme kimligi: imza/yukleme.properties (depoya GIRMEZ).
+        val yukleme = Properties().apply {
+            file("imza/yukleme.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
+        }
+        buildConfigField("String", "YUKLEME_KULLANICI", "\"${yukleme.getProperty("kullanici", "")}\"")
+        buildConfigField("String", "YUKLEME_SIFRE", "\"${yukleme.getProperty("sifre", "")}\"")
     }
 
     signingConfigs {
@@ -50,6 +59,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     packaging {
@@ -72,4 +82,6 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
 
     testImplementation("junit:junit:4.13.2")
+    // android.jar'daki org.json birim testinde bos taslaktir; gercegini ekle.
+    testImplementation("org.json:json:20240303")
 }

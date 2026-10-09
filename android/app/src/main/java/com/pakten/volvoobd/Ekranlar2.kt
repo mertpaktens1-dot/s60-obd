@@ -215,6 +215,7 @@ internal fun PerformansEkrani(m: AracModel) {
             item { Grafik("Ateşleme avansı (°) – ani düşüş vuruntu düzeltmesi olabilir", c.map { it.avans }, Lacivert) }
             item { Grafik("Emme havası (°C)", c.map { it.emme }, Kirmizi) }
         }
+        item { BenzinKarti(m) }
         item { Stage1Kontrol(m) }
         item { Stage1Bilgi() }
     }

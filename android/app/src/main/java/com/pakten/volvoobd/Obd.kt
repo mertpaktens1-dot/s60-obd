@@ -21,7 +21,7 @@ val PIDLER = listOf(
     Pid(0x11, "Gaz kelebeği", "%", "gaz_kelebegi_yuzde", true, 0) { it[0] * 100 / 255.0 },
     Pid(0x10, "Hava akışı (MAF)", "g/s", "maf_gs", true, 1) { (it[0] * 256 + it[1]) / 100.0 },
     Pid(0x0F, "Emme havası", "°C", "emme_hava_c", false, 0) { it[0] - 40.0 },
-    Pid(0x0E, "Ateşleme avansı", "°", "atesleme_avans", false, 1) { it[0] / 2.0 - 64 },
+    Pid(0x0E, "Ateşleme avansı", "°", "atesleme_avans", true, 1) { it[0] / 2.0 - 64 },
     Pid(0x06, "Kısa yakıt düzeltmesi", "%", "kisa_yakit_duz", false, 1) { (it[0] - 128) * 100 / 128.0 },
     Pid(0x07, "Uzun yakıt düzeltmesi", "%", "uzun_yakit_duz", false, 1) { (it[0] - 128) * 100 / 128.0 },
     Pid(0x5C, "Motor yağı", "°C", "yag_c", false, 0) { it[0] - 40.0 },
