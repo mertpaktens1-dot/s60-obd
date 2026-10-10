@@ -597,26 +597,105 @@ class AracModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
+    /** Son silme denemesinin sonucu (satir satir, ekranda gosterilir). */
+    var silmeSonucu by mutableStateOf<List<String>>(emptyList()); private set
+    var silmeBasarili by mutableStateOf<Boolean?>(null); private set
+
+    /**
+     * Ariza kodlarini siler ve SONUCU DOGRULAR. Eskiden yalniz "04" gonderilip cevaba bakilmiyordu;
+     * motor beyni reddettiginde (or. motor calisirken 7F 04 22) kullanici silindi saniyordu.
+     * Sira: motor calisiyor mu -> OBD 04 (toplu) -> reddeden beyne dogrudan 04 -> UDS 14 FF FF FF
+     * -> "silindiginden beri yol" (PID 31) sifirlandi mi.
+     */
     fun kodlariSil() {
         if (taraniyor || durum != Durum.BAGLI) return
         taraniyor = true
+        silmeSonucu = emptyList()
+        silmeBasarili = null
         viewModelScope.launch {
+            val satirlar = mutableListOf<String>()
             try {
-                if (!demo) {
+                if (demo) {
+                    delay(600)
+                    satirlar += "Motor (ECM): kodlar silindi ✓"
+                    silmeBasarili = true
+                } else {
                     val e = elm ?: return@launch
                     islem.withLock {
-                        e.hedef("7DF")
-                        e.iste("04", 5000)
                         e.hedef("7E0")
+                        val devir = pidOku(e, PIDLER.first { it.kod == 0x0C }) ?: 0.0
+                        if (devir > 300) {
+                            satirlar += "Motor çalışıyor (${devir.toInt()} devir). Volvo motor beyni çalışırken silmeyi reddeder."
+                            satirlar += "Motoru KAPATIN, kontağı AÇIK bırakın (start düğmesine fren basmadan bir kez basın), sonra tekrar deneyin."
+                            silmeBasarili = false
+                            return@withLock
+                        }
+                        val oncekiKm = if (0x31 in destek) silinmedenBeriKm(e) else null
+
+                        e.hedef("7DF")
+                        val toplu = e.iste("04", 6000)
+                        val sonuc = mutableMapOf<String, String>()
+                        toplu.forEach { (h, v) -> sonuc[h] = silmeCevabi(v) }
+
+                        // Motor beyni olumlu cevap vermediyse dogrudan adresle ve UDS ile tekrar dene.
+                        if (sonuc["7E8"] != "ok") {
+                            e.hedef("7E0")
+                            motorYaniti(e.iste("04", 6000))?.let { sonuc["7E8"] = silmeCevabi(it) }
+                        }
+                        if (sonuc["7E8"] != "ok") {
+                            e.hedef("7E0")
+                            e.iste("14FFFFFF", 6000)["7E8"]?.let { v -> if (v.firstOrNull() == 0x54) sonuc["7E8"] = "ok" else sonuc["7E8"] = silmeCevabi(v) }
+                        }
+                        if (sonuc.isEmpty()) satirlar += "Hiçbir modül silme komutuna cevap vermedi. Kontak açık mı?"
+                        sonuc.toSortedMap().forEach { (h, s) ->
+                            satirlar += modulAdi(h) + ": " + if (s == "ok") "silme kabul edildi ✓" else s
+                        }
+
+                        e.hedef("7E0")
+                        delay(800)
+                        if (0x31 in destek) {
+                            val km = silinmedenBeriKm(e)
+                            if (km != null) {
+                                silmeBasarili = km == 0 || (oncekiKm != null && km < oncekiKm)
+                                satirlar += if (silmeBasarili == true) "Doğrulandı: \"silindiğinden beri yol\" sayacı ${km} km'ye indi."
+                                else "DİKKAT: \"silindiğinden beri yol\" hâlâ $km km. Beyin kodları SİLMEDİ."
+                            }
+                        }
+                        if (silmeBasarili == null) silmeBasarili = sonuc["7E8"] == "ok"
                     }
                 }
             } catch (ex: Exception) {
-                hata = "Silme başarısız: ${ex.message}"
+                satirlar += "Silme başarısız: ${ex.message}"
+                silmeBasarili = false
             } finally {
                 taraniyor = false
             }
+            if (silmeBasarili == true) {
+                satirlar += "Arızanın sebebi giderilmediyse kod 1-2 sürüşte geri gelir ve lamba yeniden yanar."
+            }
+            silmeSonucu = satirlar
             kodlariTara()
         }
+    }
+
+    private suspend fun silinmedenBeriKm(e: Elm): Int? {
+        val v = motorYaniti(e.iste("0131")) ?: return null
+        return if (v.size >= 4 && v[0] == 0x41 && v[1] == 0x31) v[2] * 256 + v[3] else null
+    }
+
+    /** OBD 04 / UDS 14 cevabini Turkce aciklamaya cevirir; olumluysa "ok". */
+    private fun silmeCevabi(v: IntArray): String = when {
+        v.isEmpty() -> "cevap yok"
+        v[0] == 0x44 || v[0] == 0x54 -> "ok"
+        v[0] == 0x7F && v.size >= 3 -> when (v[2]) {
+            0x22 -> "reddetti: koşullar uygun değil (motor çalışıyor olabilir; motoru kapatıp kontağı açık bırakın)"
+            0x11, 0x12 -> "reddetti: bu silme yöntemini desteklemiyor"
+            0x31 -> "reddetti: istek kabul edilmedi"
+            0x33 -> "reddetti: güvenlik erişimi gerekiyor (Volvo cihazı gerekir)"
+            0x72 -> "reddetti: hafızaya yazılamadı"
+            else -> "reddetti (kod %02X)".format(v[2])
+        }
+        else -> "anlaşılamayan cevap: " + v.joinToString(" ") { "%02X".format(it) }
     }
 
     // ------------------------------------------------------------ tarama arsivi

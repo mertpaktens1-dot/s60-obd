@@ -209,3 +209,31 @@ fun kwp18Coz(v: IntArray): List<GecmisKod>? {
 fun asciiParcalari(v: IntArray, bas: Int, boy: Int): List<String> =
     v.drop(bas).chunked(boy).map { p -> p.map { it.toChar() }.joinToString("").filter { it.code in 33..126 } }
         .filter { it.isNotEmpty() }
+
+// ---------------------------------------------------------------- ne yapmali
+
+private val KOD_ONERI = mapOf(
+    "P0101" to "Hava akış (MAF) sensörünün okuduğu hava beklenenle tutmuyor. Sırayla: hava filtresine bakın; " +
+        "MAF sensörünü yalnızca MAF temizleyici spreyle temizleyin (dokunmadan, bezle silmeden); hava filtresi " +
+        "kutusundan turboya giden hortumda yırtık / gevşek kelepçe arayın. Düzelmezse sensör değişir.",
+    "P0420" to "Katalizörün verimi eşik altında. Önce sebebi giderin: tekleme, MAF hatası ya da fakir/zengin karışım " +
+        "katalizörü yorar ve bu kodu tetikler. Diğer kodlar çözüldükten sonra da dönerse arka oksijen sensörü ya da " +
+        "katalizör kontrol edilmeli. Egzozda katalizörden önce kaçak olmamalı.",
+    "P0171" to "Karışım fakir: emme hortumlarında hava kaçağı, kirli MAF sensörü ya da düşük yakıt basıncı en olası sebepler.",
+    "P0172" to "Karışım zengin: kirli MAF, kaçıran enjektör ya da tıkalı hava filtresi olabilir.",
+    "P0300" to "Birden çok silindirde tekleme: bujiler, bobinler, yakıt kalitesi ya da emme kaçağı. Hangi silindirlerde olduğu " +
+        "aşağıdaki tekleme sayaçlarında görünür.",
+    "P0301" to "1. silindirde tekleme: o silindirin bobinini başka silindirle değiştirin; tekleme bobinle taşınırsa bobin bozuktur.",
+    "P0302" to "2. silindirde tekleme: bobini başka silindirle değiştirip tekleme taşınıyor mu bakın; taşınmıyorsa bujiye bakın.",
+    "P0303" to "3. silindirde tekleme: bobini başka silindirle değiştirip tekleme taşınıyor mu bakın; taşınmıyorsa bujiye bakın.",
+    "P0304" to "4. silindirde tekleme: bobini başka silindirle değiştirip tekleme taşınıyor mu bakın; taşınmıyorsa bujiye bakın.",
+    "P0128" to "Motor çalışma sıcaklığına geç ulaşıyor: termostat açık kalıyor olabilir. Termostat değişimi gerekir.",
+    "P0455" to "Yakıt buharı sisteminde büyük kaçak: önce depo kapağının tam kapandığından emin olun; çoğu zaman sebep budur.",
+    "P0442" to "Yakıt buharı sisteminde küçük kaçak: depo kapağı contası ya da kömür kanister hortumları.",
+    "P0299" to "Turbo yeterli basınç yapmıyor: intercooler hortumlarında yağlanma / yırtık, wastegate ya da turbo kontrol edilmeli.",
+    "P0562" to "Sistem voltajı düşük: akü yaşlanmış ya da şarj dinamosu yetersiz olabilir. Akü testi yaptırın.",
+    "P0016" to "Krank ve eksantrik konumu uyumsuz: zincir/kayış gerilmesi ya da VVT sorunu. Motor yağı seviyesini kontrol edin, servise gösterin.",
+    "P2187" to "Rölantide karışım fakir: emme manifoldu, PCV (karter havalandırma) hortumu ya da vakum hortumlarında kaçak.",
+)
+
+fun kodOnerisi(kod: String): String? = KOD_ONERI[kod]

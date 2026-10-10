@@ -422,6 +422,18 @@ private fun ArizaEkrani(m: AracModel) {
             }
         }
         m.hata?.let { item { Text(it, color = Kirmizi) } }
+        if (m.silmeSonucu.isNotEmpty()) {
+            item {
+                val ok = m.silmeBasarili == true
+                Kart(arka = if (ok) Color(0xFFE8F5E9) else Color(0xFFFDECEA)) {
+                    Text(
+                        if (ok) "Kodlar silindi" else "Kodlar SİLİNEMEDİ",
+                        fontWeight = FontWeight.Bold, color = if (ok) Yesil else Kirmizi,
+                    )
+                    m.silmeSonucu.forEach { Text(it, fontSize = 14.sp, modifier = Modifier.padding(top = 4.dp)) }
+                }
+            }
+        }
         if (m.kodlar == null && m.taramaArsivi.isNotEmpty()) {
             item { Text("Önceki taramalar aşağıda. Güncel durum için taramayı başlatın.", color = Gri, fontSize = 13.sp) }
         }
@@ -448,6 +460,24 @@ private fun ArizaEkrani(m: AracModel) {
                     KodGrubu("Kalıcı (silinemez, onarım sonrası kendiliğinden gider)", mk.kalici)
                 }
             }
+            val oneriler = kodlar.flatMap { it.kayitli + it.bekleyen + it.kalici }.distinct()
+                .mapNotNull { k -> kodOnerisi(k)?.let { k to it } }
+            if (oneriler.isNotEmpty()) {
+                item {
+                    Kart(arka = Color(0xFFFFF8E1)) {
+                        Baslik("Ne yapmalı?")
+                        oneriler.forEach { (k, o) ->
+                            Text(k, fontWeight = FontWeight.Bold, color = Kirmizi, modifier = Modifier.padding(top = 6.dp))
+                            Text(o, fontSize = 14.sp)
+                        }
+                        Text(
+                            "Silmek arızayı gidermez, yalnızca lambayı geçici olarak söndürür. Sebep giderilince kod " +
+                                "kendiliğinden geri gelmez.",
+                            fontSize = 12.sp, color = Gri, modifier = Modifier.padding(top = 8.dp),
+                        )
+                    }
+                }
+            }
         }
         if (m.kodlar != null) gecmisBolumleri(m)
         arsivBolumu(m)
@@ -465,8 +495,10 @@ private fun ArizaEkrani(m: AracModel) {
             title = { Text("Arıza kodları silinsin mi?") },
             text = {
                 Text(
-                    "Tüm modüllerdeki kayıtlı kodlar ve donmuş kare verisi silinir. Arıza giderilmediyse kod geri gelir. " +
-                        "Motor KAPALI, kontak AÇIK olmalı. Kodları not aldınız mı?",
+                    "Kayıtlı kodlar ve donmuş kare verisi silinir. Arıza giderilmediyse kod 1-2 sürüşte geri gelir.\n\n" +
+                        "ÖNEMLİ: Motor KAPALI, kontak AÇIK olmalı (motor çalışırken Volvo beyni silmeyi reddeder). " +
+                        "Silme sonrası uygulama sonucu doğrular.\n\n" +
+                        "Gösterge panelindeki \"City Safety\" gibi mesajlar ayrı modüllerdedir; bu düğme onları silmez.",
                 )
             },
             confirmButton = {
